@@ -1,15 +1,15 @@
 /**
- * Strata pristupu: appka MUSI povedat, ze prestala strazit.
+ * Lost access: the app MUST say that it stopped watching.
  *
- * PRECO TENTO TEST (1.9.2026): ked obchodu dobehol Shopify token alebo
- * merchant odobral Google ucet, `runCheck` hodilo vynimku, scheduler ju
- * zalogoval a slo sa dalej. Navonok sa NESTALO NIC — ziadny mail, dashboard
- * dalej ukazoval posledny vysledok z cache. Monitorovacia appka teda oslepla
- * a tvarila sa presne ako appka, ktora vsetko strazi. Horsie nez chyba:
- * ticho, ktore sa na nerozoznanie podoba na "vsetko je v poriadku".
+ * WHY THIS TEST: when a store's Shopify token expired or the merchant
+ * removed the Google account, `runCheck` threw, the scheduler logged it and
+ * moved on. Outwardly NOTHING HAPPENED: no mail, and the dashboard kept
+ * showing the last cached result. The monitoring app went blind while
+ * looking exactly like an app that watches everything. Worse than an error:
+ * silence indistinguishable from "all is well".
  *
- * Testuje sa proti skutocnemu SMTP sinku na loopbacku, rovnako ako
- * alerts_group.test.mjs — nie proti podvrhnutej funkcii.
+ * Tested against a real SMTP sink on loopback, same as
+ * alerts_group.test.mjs, not against a stubbed function.
  */
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -75,11 +75,11 @@ before(async () => {
 after(() => {
   sink?.close();
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`, CFG]) {
-    try { fs.unlinkSync(f); } catch { /* nevadi */ }
+    try { fs.unlinkSync(f); } catch { /* ignore */ }
   }
 });
 
-/** Obchod, ktory uz raz bol plne nastaveny. */
+/** A store that has been fully set up at least once. */
 function seed({ token = "tok", google = "ref" } = {}) {
   db.prepare("DELETE FROM alerts").run();
   db.prepare("DELETE FROM check_history").run();
@@ -92,24 +92,24 @@ function seed({ token = "tok", google = "ref" } = {}) {
   outbox.length = 0;
 }
 
-/** Posunie zaciatok poruchy do minulosti — obide ochrannu lehotu. */
+/** Moves the failure start into the past to skip the grace period. */
 const ageBrokenBy = (hours) => db.prepare(
   `UPDATE shops SET access_broken_since = datetime('now', ?) WHERE id = 1`,
 ).run(`-${hours} hours`);
 
 beforeEach(() => seed());
 
-test("markAccessBroken drzi cas PRVEHO zlyhania, nie posledneho", async () => {
+test("markAccessBroken keeps the time of the FIRST failure, not the latest", async () => {
   dbm.markAccessBroken(1, "google_auth", "revoked");
   const first = db.prepare("SELECT access_broken_since s FROM shops WHERE id=1").get().s;
   await new Promise((r) => setTimeout(r, 1100));
   dbm.markAccessBroken(1, "google_auth", "revoked again");
   const second = db.prepare("SELECT access_broken_since s FROM shops WHERE id=1").get().s;
   assert.equal(second, first,
-    "opakovane zlyhanie nesmie posuvat cas — porucha by nikdy nedozrela na alert");
+    "a repeated failure must not move the time; the failure would never mature into an alert");
 });
 
-test("zmena druhu poruchy zacina novy cas", () => {
+test("a change in failure kind starts a new time", () => {
   dbm.markAccessBroken(1, "shopify_auth", "x");
   db.prepare("UPDATE shops SET access_broken_since='2020-01-01 00:00:00' WHERE id=1").run();
   dbm.markAccessBroken(1, "google_auth", "y");
@@ -119,7 +119,7 @@ test("zmena druhu poruchy zacina novy cas", () => {
   assert.notEqual(r.s, "2020-01-01 00:00:00");
 });
 
-test("clearAccessBroken po uspesnej kontrole zmaze priznak", () => {
+test("clearAccessBroken clears the flag after a successful check", () => {
   dbm.markAccessBroken(1, "google_auth", "x");
   dbm.clearAccessBroken(1);
   const r = db.prepare(
@@ -128,30 +128,30 @@ test("clearAccessBroken po uspesnej kontrole zmaze priznak", () => {
   assert.equal(r.s, null);
 });
 
-test("obchod bez tokenu z planovaca NEVYPADNE", async () => {
-  // Presne toto bola podstata chyby: `dueShops` filtroval na pritomnost
-  // tokenov, takze obchod, ktoremu prave zmizol pristup, prestal byt
-  // kontrolovany — a tym padom nemal ako vzniknut ani alert.
+test("a store without a token does NOT drop out of the scheduler", async () => {
+  // This was the core of the bug: `dueShops` filtered on token presence, so
+  // a store that just lost access was no longer checked, and therefore no
+  // alert could ever be raised.
   seed({ token: null, google: null });
   let seen = 0;
   await scheduler.runScheduledChecks(async () => {
     seen += 1;
     throw new Error("shop not authenticated");
   });
-  assert.equal(seen, 1, "obchod bez tokenu sa musi dostat ku kontrole");
+  assert.equal(seen, 1, "a store without a token must still reach the check");
 });
 
-test("porucha v ochrannej lehote NEPOSIELA mail", async () => {
-  dbm.markAccessBroken(1, "google_auth", "x");   // prave teraz
+test("a failure within the grace period does NOT send a mail", async () => {
+  dbm.markAccessBroken(1, "google_auth", "x");   // right now
   await scheduler.runScheduledChecks(async () => {
     throw new Error("google auth failed");
   });
   await alerts.flushAlerts();
   assert.equal(outbox.length, 0,
-    "kratky vypadok sa casto opravi sam; falosny poplach z monitoringu je drahsi");
+    "a short outage often fixes itself; a false alarm from monitoring costs more");
 });
 
-test("porucha po ochrannej lehote posle mail s navodom", async () => {
+test("a failure after the grace period sends a mail with instructions", async () => {
   dbm.markAccessBroken(1, "google_auth", "x");
   ageBrokenBy(48);
   await scheduler.runScheduledChecks(async () => {
@@ -159,17 +159,17 @@ test("porucha po ochrannej lehote posle mail s navodom", async () => {
   });
   await alerts.flushAlerts();
 
-  assert.equal(outbox.length, 1, "merchant sa MUSI dozvediet, ze appka oslepla");
+  assert.equal(outbox.length, 1, "the merchant MUST learn that the app went blind");
   const mail = outbox[0];
   assert.match(mail, /Subject: .*can no longer check your tracking/);
-  assert.match(mail, /Google/, "ma povedat, ktory ucet treba pripojit");
+  assert.match(mail, /Google/, "should say which account to reconnect");
   assert.match(mail, /NOT checking your tracking/i,
-    "musi zaznit, ze medzitym nikto nestrazi");
+    "must state that nobody is watching in the meantime");
 });
 
-test("mail o slepote neobsahuje stare cisla z poslednej kontroly", async () => {
-  // ran_at zamerne v minulosti — s cerstvym behom by obchod nebol "due"
-  // a planovac by sa ku kontrole vobec nedostal.
+test("the blindness mail does not include stale numbers from the last check", async () => {
+  // ran_at deliberately in the past; with a fresh run the store would not be
+  // "due" and the scheduler would never reach the check.
   db.prepare(`INSERT INTO check_history
       (shop_id, ran_at, missing, missing_pct, duplicates, orders, ga4)
     VALUES (1, datetime('now','-30 days'), 7, 12.5, 3, 40, 33)`).run();
@@ -180,14 +180,14 @@ test("mail o slepote neobsahuje stare cisla z poslednej kontroly", async () => {
   });
   await alerts.flushAlerts();
 
-  // Cisla su spred poruchy a appka uz nevie, ci este platia. Ukazat ich
-  // vedla vety "nevidime do tvojho obchodu" si priamo protireci.
+  // The numbers predate the failure and the app no longer knows whether they
+  // hold. Showing them next to "we cannot see your store" is contradictory.
   assert.doesNotMatch(outbox[0], /Orders compared/);
   assert.doesNotMatch(outbox[0], /12\.5/);
-  assert.match(outbox[0], /Shopify admin/, "ma povedat, kde to merchant napravi");
+  assert.match(outbox[0], /Shopify admin/, "should say where the merchant can fix it");
 });
 
-test("trvala porucha neposiela mail na kazdy tick", async () => {
+test("a lasting failure does not send a mail on every tick", async () => {
   dbm.markAccessBroken(1, "google_auth", "x");
   ageBrokenBy(48);
   const fail = async () => { throw new Error("google auth failed"); };
@@ -197,19 +197,19 @@ test("trvala porucha neposiela mail na kazdy tick", async () => {
     await alerts.flushAlerts();
   }
   assert.equal(outbox.length, 1,
-    "opakovanie toho isteho alertu do 24 h si merchant odfiltruje");
+    "the merchant would filter out the same alert repeated within 24 h");
 });
 
-test("reautorizacia Shopify (upsertShop) zhasne priznak sama", () => {
+test("Shopify reauthorization (upsertShop) clears the flag by itself", () => {
   dbm.markAccessBroken(1, "shopify_auth", "x");
   dbm.upsertShop("demo-store.myshopify.com", "novy-token", "novy-refresh", 3600);
   const r = db.prepare(
     "SELECT access_broken_kind k FROM shops WHERE shop_domain='demo-store.myshopify.com'").get();
   assert.equal(r.k, null,
-    "po naprave musi banner zhasnut hned, nie az po dalsej kontrole");
+    "after the fix the banner must turn off immediately, not after the next check");
 });
 
-test("slepota prebije v predmete aj vypadok GA4", async () => {
+test("blindness also outranks a GA4 outage in the subject", async () => {
   dbm.markAccessBroken(1, "google_auth", "x");
   ageBrokenBy(48);
   db.prepare("INSERT INTO alerts (shop_id, kind, message) VALUES (1,'ga4_silent','GA4 nothing.')").run();
@@ -218,22 +218,22 @@ test("slepota prebije v predmete aj vypadok GA4", async () => {
   });
   await alerts.flushAlerts();
 
-  // Ked appka nevidi, kazdy iny nalez je len posledna znama snimka.
+  // When the app cannot see, every other finding is just the last known snapshot.
   assert.match(outbox[0], /Subject: .*can no longer check your tracking/);
 });
 
 /*
- * CERSTVA INSTALACIA — "este nenastavene" NIE JE porucha.
+ * FRESH INSTALL: "not set up yet" is NOT a failure.
  *
- * Toto je stav, v ktorom appku vidi reviewer zo Shopify aj kazdy novy
- * merchant. Appka doteraz nevedela odlisit "Google ucet nikdy nebol
- * pripojeny" od "spojenie sa stratilo", takze cerstvo nainstalovanemu
- * obchodu zapisala vlastnu poruchu a po ochrannej lehote z nej dozrel
- * e-mail "prestali sme strazit tvoje meranie" — o niecom, co nikdy nebezalo.
+ * This is the state in which a Shopify reviewer and every new merchant see
+ * the app. Previously the app could not tell "the Google account was never
+ * connected" from "the connection was lost", so it recorded its own failure
+ * for a freshly installed store, and after the grace period that turned into
+ * a "we stopped watching your tracking" e-mail about something that never ran.
  */
-test("obchod, ktory Google nikdy nepripojil, NEDOSTANE alert o strate pristupu", async () => {
+test("a store that never connected Google does NOT get a lost-access alert", async () => {
   seed({ token: "tok", google: null });
-  // presne stav po instalacii: nikdy pripojene
+  // exactly the post-install state: never connected
   db.prepare("UPDATE shops SET ga4_connected_at = NULL WHERE id = 1").run();
   dbm.markAccessBroken(1, "google_auth", "google not connected");
   ageBrokenBy(48);
@@ -242,10 +242,10 @@ test("obchod, ktory Google nikdy nepripojil, NEDOSTANE alert o strate pristupu",
   await alerts.flushAlerts();
 
   assert.equal(outbox.length, 0,
-    "falosny poplach z monitorovacej appky — po nom uz merchant neberie vazne ziadny dalsi mail");
+    "a false alarm from a monitoring app; after it the merchant stops taking any mail seriously");
 });
 
-test("obchod, ktoremu spojenie UZ RAZ islo, alert dostane", async () => {
+test("a store whose connection worked AT LEAST ONCE does get the alert", async () => {
   seed({ token: "tok", google: null });
   db.prepare("UPDATE shops SET ga4_connected_at = datetime('now','-30 days') WHERE id = 1").run();
   dbm.markAccessBroken(1, "google_auth", "revoked");
@@ -254,13 +254,13 @@ test("obchod, ktoremu spojenie UZ RAZ islo, alert dostane", async () => {
   scheduler.raiseAccessAlert(1);
   await alerts.flushAlerts();
 
-  assert.equal(outbox.length, 1, "toto je skutocna strata pristupu a musi sa ozvat");
+  assert.equal(outbox.length, 1, "this is a real loss of access and must be reported");
   assert.match(outbox[0], /Google/);
 });
 
-test("migracia v8 oznaci uz pripojene obchody a zhasne falosnu poruchu", () => {
-  // Obchod s platnym refresh tokenom musi po migracii vyzerat ako pripojeny,
-  // inak by sa skutocna strata pristupu prestala hlasit.
+test("migration v8 marks already connected stores and clears the false failure", () => {
+  // A store with a valid refresh token must look connected after the
+  // migration; otherwise real loss of access would stop being reported.
   seed({ token: "tok", google: "ref" });
   const r = db.prepare("SELECT ga4_connected_at c FROM shops WHERE id=1").get();
   assert.ok(r.c === null || typeof r.c === "string");

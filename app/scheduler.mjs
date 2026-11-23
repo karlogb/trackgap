@@ -1,18 +1,18 @@
 /**
- * TrackGap — planovac pravidelnych kontrol.
+ * TrackGap - scheduler for periodic checks.
  *
- * PRECO: bez toho sa kontrola spustila LEN ked merchant otvoril dashboard.
- * Slub produktu ("ozveme sa v den, ked sa tracking pokazi") aj platene plany
- * ("Daily checks", "Email alerts") boli teda nesplnitelne — merchant, ktory
- * prestal chodit do appky, nedostal nic. Prave vtedy je alert najpotrebnejsi.
- * Audit 31.8.2026, bod 4.
+ * WHY: without it a check ran ONLY when the merchant opened the dashboard.
+ * The product promise ("we tell you the day tracking breaks") and the paid
+ * plans ("Daily checks", "Email alerts") could not be fulfilled: a merchant
+ * who stopped opening the app got nothing, exactly when an alert is needed
+ * most.
  *
- * Kadencia podla planu:
- *   free    tyzdenne
- *   ostatne denne
+ * Cadence by plan:
+ *   free    weekly
+ *   others  daily
  *
- * Bezi v tom istom procese ako server (jeden obchod = par HTTP volani denne,
- * na samostatny worker to zatial nie je).
+ * Runs in the same process as the server (one store = a few HTTP calls per
+ * day; a separate worker is not needed yet).
  */
 import { db } from "./db.mjs";
 import { PLANS } from "./billing.mjs";
@@ -20,35 +20,35 @@ import { flushAlerts } from "./alerts.mjs";
 import { saveAlerts } from "./monitor.mjs";
 
 /**
- * Ako dlho tolerujeme stratu pristupu, nez o nej napiseme merchantovi.
+ * How long we tolerate lost access before e-mailing the merchant.
  *
- * Nie hned pri prvom zlyhani: kratky vypadok Shopify/Google API alebo nasho
- * servera by inak vygeneroval mail o "strate pristupu", ktora sa o hodinu
- * sama opravi. Falosny poplach z monitorovacej appky je drahsi nez hodinove
- * meskanie — po nom uz merchant dalsi mail neberie vazne.
+ * Not on the first failure: a short Shopify/Google API or server outage
+ * would otherwise produce a "lost access" mail that fixes itself within an
+ * hour. A false alarm from a monitoring app costs more than an hour of
+ * delay; after one, the merchant stops taking further mails seriously.
  */
 const ACCESS_GRACE_H = Number(process.env.TRACKGAP_ACCESS_GRACE_H ?? 6);
 
 const HOUR = 3600_000;
-const TICK_MS = 30 * 60_000;        // ako casto sa pozerame, ci nieco nedozrelo
+const TICK_MS = 30 * 60_000;        // how often we check whether something is due
 
 /**
- * Hodina (v case obchodu), kedy ma bezat denna kontrola.
+ * Hour (in store time) at which the daily check runs.
  *
- * PRECO FIXNA HODINA: bez nej sa kadencia pocitala od posledneho behu, takze
- * cas kontroly kazdy den driftoval a alert mohol prist o 3:00 rano. Merchant
- * ma dostat mail rano, ked s tym vie nieco spravit, a hlavne az ked ma GA4
- * predosly den spracovany.
+ * WHY A FIXED HOUR: without it the cadence was counted from the last run, so
+ * the check time drifted every day and an alert could arrive at 3 a.m. The
+ * merchant should get the mail in the morning when they can act on it, and
+ * only once GA4 has processed the previous day.
  */
 const DAILY_HOUR = Number(process.env.TRACKGAP_DAILY_HOUR ?? 7);
 
 /**
- * Kolko hodin uz musi ubehnut od posledneho behu, aby sa spustil dalsi.
- * Braní tomu, aby sa kontrola v okne DAILY_HOUR spustila viackrat.
+ * Minimum hours since the last run before another one starts.
+ * Prevents the check from running more than once within the DAILY_HOUR window.
  */
 const MIN_GAP_H = 20;
 
-/** Lokalna hodina v casovej zone obchodu (fallback: cas servera). */
+/** Local hour in the store's time zone (fallback: server time). */
 function localHour(tz) {
   try {
     return Number(new Intl.DateTimeFormat("en-GB", {
@@ -59,23 +59,23 @@ function localHour(tz) {
   }
 }
 
-/** Ako casto ma bezat kontrola pre dany plan, v hodinach. */
+/** How often the check runs for a plan, in hours. */
 function cadenceHours(plan) {
   return plan === "free" ? 24 * 7 : 24;
 }
 
 /**
- * Obchody, ktorym uz uplynula kadencia.
+ * Stores whose cadence has elapsed.
  *
- * Berieme len tie, ktore uz raz BOLI nastavene (maju vybranu GA4 property) —
- * inak niet co porovnavat.
+ * Only stores that HAVE BEEN set up at least once (have a GA4 property
+ * selected); otherwise there is nothing to compare.
  *
- * ZAMERNE tu NEFILTRUJEME na pritomnost tokenov. Predtym tu bolo
- * `access_token_enc IS NOT NULL AND google_refresh_enc IS NOT NULL`, cize
- * obchod, ktoremu prave zmizol pristup, z planovaca ticho VYPADOL. Prestal
- * byt kontrolovany a zaroven nemal ako vzniknut alert — appka o svojej
- * slepote nemala ako povedat. Nechame ich prejst, `runCheck` zlyha s
- * AccessError a merchant dostane mail (1.9.2026).
+ * We deliberately do NOT filter on token presence here. This used to be
+ * `access_token_enc IS NOT NULL AND google_refresh_enc IS NOT NULL`, so a
+ * store that just lost access silently DROPPED OUT of the scheduler. It was
+ * no longer checked and no alert could be raised; the app had no way to
+ * report its own blindness. We let them through, `runCheck` fails with
+ * AccessError and the merchant gets a mail.
  */
 function dueShops() {
   const rows = db.prepare(`
@@ -88,20 +88,20 @@ function dueShops() {
 
   const now = Date.now();
   return rows.filter((r) => {
-    if (!r.last_run) return true;                 // este nikdy nebezalo
+    if (!r.last_run) return true;                 // never ran yet
     const age = now - new Date(r.last_run.replace(" ", "T") + "Z").getTime();
 
-    // Bezpecnostna poistka: ked kontrola nebezala vyrazne dlhsie, nez ma
-    // (server bol dole, obchod bol bez GA4), spusti sa bez ohladu na hodinu.
+    // Safety net: if the check has not run for much longer than it should
+    // (server down, store without GA4), run it regardless of the hour.
     if (age >= cadenceHours(r.plan) * HOUR + 12 * HOUR) return true;
 
-    // Kadencia planu plati vzdy — free ma tyzdennu, nie dennu kontrolu.
-    // Odpocitava sa mala rezerva, aby beh o 7:00 nebol o par minut "prilis
-    // skoro" a neodsunul sa o cely den (resp. tyzden).
+    // The plan cadence always applies: free gets a weekly, not daily, check.
+    // A small margin is subtracted so the 7:00 run is not a few minutes "too
+    // early" and pushed back by a whole day (or week).
     if (age < cadenceHours(r.plan) * HOUR - 2 * HOUR) return false;
     if (age < MIN_GAP_H * HOUR) return false;
 
-    // v ramci dna cakame na urcenu hodinu v case OBCHODU
+    // within the day, wait for the set hour in STORE time
     return localHour(r.timezone) === DAILY_HOUR;
   });
 }
@@ -109,12 +109,12 @@ function dueShops() {
 let running = false;
 
 /**
- * Ked appka stratila pristup a trva to uz dlhsie nez ACCESS_GRACE_H,
- * vytvor alert — appka musi POVEDAT, ze prestala strazit.
+ * When the app has lost access for longer than ACCESS_GRACE_H, create an
+ * alert: the app must SAY that it stopped watching.
  *
- * Text sa lisi podla toho, kto to vie opravit a ako: Shopify pristup sa
- * obnovi otvorenim appky v admine, Google pripojenim uctu v nastaveniach.
- * Vseobecne "nastala chyba" by merchanta nikam neposunulo.
+ * The text depends on who can fix it and how: Shopify access is restored by
+ * opening the app in the admin, Google by reconnecting the account in
+ * settings. A generic "an error occurred" would not help the merchant.
  */
 export function raiseAccessAlert(shopId) {
   const s = db.prepare(
@@ -123,9 +123,9 @@ export function raiseAccessAlert(shopId) {
      FROM shops WHERE id = ?`).get(shopId);
   if (!s?.kind || !s.since) return;
 
-  // Obchod, ktory Google nikdy nepripojil, nemal co stratit. Poslat mu
-  // "prestali sme strazit tvoje meranie" je falosny poplach z monitorovacej
-  // appky — a po nom uz merchant ziadny dalsi mail nevezme vazne.
+  // A store that never connected Google had nothing to lose. Telling it "we
+  // stopped watching your tracking" is a false alarm from a monitoring app,
+  // after which the merchant stops taking any further mail seriously.
   if (s.kind === "google_auth" && !s.ga4_connected_at && !s.google_refresh_enc) {
     return;
   }
@@ -141,14 +141,14 @@ export function raiseAccessAlert(shopId) {
       + "checking your tracking. Open the app from your Shopify admin to "
       + "reauthorize it.";
 
-  // saveAlerts sam odfiltruje opakovanie toho isteho druhu do 24 h, takze
-  // trvala porucha posle jeden mail denne, nie jeden na kazdy tick.
+  // saveAlerts itself filters repeats of the same kind within 24 h, so a
+  // lasting failure sends one mail per day, not one per tick.
   saveAlerts(shopId, [{ kind: "access_lost", message }]);
 }
 
 /**
- * Jeden prechod. Chyba jedneho obchodu nesmie zastavit ostatne — kazdy
- * je vo vlastnom try/catch.
+ * One pass. A failure in one store must not stop the others; each runs in
+ * its own try/catch.
  */
 export async function runScheduledChecks(runCheck) {
   if (running) return { skipped: "already running" };
@@ -167,14 +167,14 @@ export async function runScheduledChecks(runCheck) {
       } catch (e) {
         console.error(`scheduled check failed (${shop.shop_domain}):`, e.message);
         done.push({ shop: shop.shop_domain, error: e.message });
-        // Zlyhanie kontroly sa nesmie skoncit len zapisom do logu. Prave
-        // preto appka doteraz oslepla potichu: vynimka sa zalogovala, cyklus
-        // sa krutil dalej a merchant zil v presvedceni, ze je strazeny.
+        // A failed check must not end with just a log entry. That is how the
+        // app used to go blind silently: the exception was logged, the loop
+        // kept spinning and the merchant believed they were being watched.
         raiseAccessAlert(shop.id);
       }
     }
     if (done.length) {
-      // alerty az po vsetkych kontrolach, nech ide jeden mail na obchod
+      // alerts only after all checks, so each store gets a single mail
       await flushAlerts().catch((e) =>
         console.error("flushAlerts:", e.message));
     }
@@ -184,7 +184,7 @@ export async function runScheduledChecks(runCheck) {
   return { checked: done.length, done };
 }
 
-/** Uprace stare zaznamy — inak rastu donekonecna. */
+/** Cleans up old records; otherwise they grow forever. */
 export function pruneOldRows() {
   const stmts = [
     "DELETE FROM webhook_log WHERE seen_at < datetime('now','-7 days')",
@@ -197,12 +197,12 @@ export function pruneOldRows() {
     "DELETE FROM check_history WHERE ran_at < datetime('now','-12 months')",
     "DELETE FROM backfills WHERE created_at < datetime('now','-12 months')",
     "DELETE FROM findings WHERE detected_at < datetime('now','-12 months')",
-    // Ads report je len cache; po dni je bezcenny a len zabera miesto.
+    // The Ads report is only a cache; after a day it is worthless and just takes space.
     "DELETE FROM kv_cache WHERE created_at < datetime('now','-1 day')",
   ];
   let total = 0;
   for (const s of stmts) {
-    try { total += db.prepare(s).run().changes; } catch { /* tabulka moze chybat */ }
+    try { total += db.prepare(s).run().changes; } catch { /* table may be missing */ }
   }
   return total;
 }
@@ -211,23 +211,23 @@ export function startScheduler(runCheck) {
   const tick = async () => {
     try {
       const r = await runScheduledChecks(runCheck);
-      if (r.checked) console.log(`scheduler: ${r.checked} kontrol`);
+      if (r.checked) console.log(`scheduler: ${r.checked} checks`);
     } catch (e) {
       console.error("scheduler tick:", e.message);
     }
   };
 
-  // prvy beh o minutu po starte — nech restart nespusti vsetko naraz
+  // first run one minute after start, so a restart does not fire everything at once
   setTimeout(tick, 60_000);
   const t1 = setInterval(tick, TICK_MS);
 
   const t2 = setInterval(() => {
     const n = pruneOldRows();
-    if (n) console.log(`scheduler: uprataných ${n} starých riadkov`);
+    if (n) console.log(`scheduler: cleaned up ${n} old rows`);
   }, 24 * HOUR);
 
-  // nech interval nedrzi proces pri zivote pri vypinani
+  // do not let the interval keep the process alive on shutdown
   t1.unref?.();
   t2.unref?.();
-  console.log(`scheduler: spusteny (tick ${TICK_MS / 60000} min)`);
+  console.log(`scheduler: started (tick ${TICK_MS / 60000} min)`);
 }

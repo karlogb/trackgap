@@ -1,36 +1,36 @@
 /**
- * TrackGap — minimalny SMTP klient.
+ * TrackGap - minimal SMTP client.
  *
- * PRECO VLASTNY MODUL: povodny klient v alerts.mjs mal dve chyby, ktore by
- * sa prejavili az v produkcii, ked by uz na alerte zalezalo (31.8.2026):
+ * WHY A CUSTOM MODULE: the original client in alerts.mjs had two bugs that
+ * would only show up in production, once an alert actually mattered:
  *
- *  1. NEROBIL STARTTLS. Proton Bridge na 127.0.0.1:1025 ho inzeruje
- *     (`250-STARTTLS`) a AUTH pred nim odmieta. Alert by teda nikdy neodisiel.
- *  2. Stav sa posuval na kazdom `data` evente, ktory konci CRLF. Viacriadkova
- *     odpoved (`250-PIPELINING\r\n250-8BITMIME\r\n...`) sa da rozdelit do
- *     viacerych TCP chunkov -> klient preskocil krok a poslal prikaz mimo
- *     poradia. Fungovalo to nahodne, podla toho, ako sa paket rozsekol.
+ *  1. It did NOT do STARTTLS. Proton Bridge on 127.0.0.1:1025 advertises it
+ *     (`250-STARTTLS`) and refuses AUTH before it. The alert would never be sent.
+ *  2. State advanced on every `data` event ending in CRLF. A multi-line
+ *     reply (`250-PIPELINING\r\n250-8BITMIME\r\n...`) can be split across
+ *     several TCP chunks -> the client skipped a step and sent a command out
+ *     of order. Whether it worked depended on how the packet was split.
  *
- * Teraz sa odpoved zbiera do buffra a za dokoncenu sa povazuje az riadok
- * v tvare `NNN<medzera>` — presne ako to definuje RFC 5321.
+ * Now the reply is collected in a buffer and considered complete only at a
+ * line of the form `NNN<space>`, exactly as RFC 5321 defines it.
  */
 import net from "node:net";
 import tls from "node:tls";
 
 const CRLF = "\r\n";
 
-// SNI sa podla RFC 6066 nesmie nastavit na IP adresu (Node to hlasi ako
-// DeprecationWarning). Na loopbacku ziadne SNI netreba.
+// Per RFC 6066, SNI must not be set to an IP address (Node reports it as a
+// DeprecationWarning). No SNI is needed on loopback.
 const isIp = (h) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":");
 const sni = (h) => (isIp(h) ? undefined : h);
 
-/** Precita jednu kompletnu SMTP odpoved zo socketu. */
+/** Reads one complete SMTP reply from the socket. */
 function readReply(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buf = "";
     const onData = (d) => {
       buf += d.toString("utf8");
-      // posledny UKONCENY riadok musi mat tvar "NNN " (medzera, nie pomlcka)
+      // the last COMPLETE line must have the form "NNN " (space, not hyphen)
       const lines = buf.split(CRLF);
       const last = lines[lines.length - 1] === "" ? lines[lines.length - 2] : null;
       if (last && /^\d{3} /.test(last)) {
@@ -59,9 +59,9 @@ function readReply(sock, timeoutMs) {
 }
 
 /**
- * Posle riadok a pocka na odpoved. `expect` je zoznam kodov, ktore su v poriadku;
- * cokolvek ine je chyba a vyhodi vynimku s celym textom od servera (bez neho
- * sa problemy s Bridge ladia velmi zle).
+ * Sends a line and waits for the reply. `expect` lists acceptable codes;
+ * anything else is an error and throws with the full server text (without it
+ * Bridge problems are very hard to debug).
  */
 async function cmd(sock, line, expect, timeoutMs, redact = false) {
   if (line !== null) sock.write(line + CRLF);
@@ -73,15 +73,15 @@ async function cmd(sock, line, expect, timeoutMs, redact = false) {
   return r;
 }
 
-/** RFC 5321: riadok zacinajuci bodkou sa v DATA musi zdvojit. */
+/** RFC 5321: a line starting with a dot must be doubled in DATA. */
 function dotStuff(body) {
   return body.split(CRLF).map((l) => (l.startsWith(".") ? "." + l : l)).join(CRLF);
 }
 
 /**
- * Odosle jeden mail. Vracia { ok: true } alebo hodi vynimku.
+ * Sends one mail. Returns { ok: true } or throws.
  *
- * `cfg`: { host, port, user, pass, secure }  (secure = implicitne TLS, napr. 465)
+ * `cfg`: { host, port, user, pass, secure }  (secure = implicit TLS, e.g. 465)
  */
 export async function sendMail(cfg, { from, to, subject, text, replyTo }) {
   const TIMEOUT = 30_000;
@@ -104,16 +104,16 @@ export async function sendMail(cfg, { from, to, subject, text, replyTo }) {
     await cmd(sock, null, [220], TIMEOUT);                     // banner
     let greet = await cmd(sock, `EHLO ${cfg.helo || "localhost"}`, [250], TIMEOUT);
 
-    // STARTTLS, ak ho server ponuka a este nie sme sifrovani.
-    // Proton Bridge bez neho odmietne AUTH.
+    // STARTTLS if the server offers it and we are not encrypted yet.
+    // Proton Bridge refuses AUTH without it.
     if (!cfg.secure && /STARTTLS/i.test(greet.text)) {
       await cmd(sock, "STARTTLS", [220], TIMEOUT);
       const plain = sock;
       sock = tls.connect({
         socket: plain,
         servername: sni(host),
-        // Bridge pouziva vlastny lokalny certifikat na loopbacku; retazec sa
-        // overit neda a spojenie aj tak neopusti stroj.
+        // Bridge uses its own local certificate on loopback; the chain cannot
+        // be verified and the connection never leaves the machine anyway.
         rejectUnauthorized: false,
       });
       sock.setTimeout(TIMEOUT);
@@ -134,12 +134,12 @@ export async function sendMail(cfg, { from, to, subject, text, replyTo }) {
         await cmd(sock, Buffer.from(cfg.user).toString("base64"), [334], TIMEOUT, true);
         await cmd(sock, Buffer.from(cfg.pass).toString("base64"), [235], TIMEOUT, true);
       } else {
-        throw new Error("smtp: server neponuka AUTH PLAIN ani LOGIN");
+        throw new Error("smtp: server offers neither AUTH PLAIN nor LOGIN");
       }
     }
 
-    // Envelope sender musi byt adresa, ktoru ma ucet pravo pouzit — pri
-    // Proton Bridge je to prihlasovacia adresa. Zobrazene "From" moze byt ine.
+    // The envelope sender must be an address the account may use; for
+    // Proton Bridge it is the login address. The displayed "From" can differ.
     const envelopeFrom = cfg.envelopeFrom || cfg.user;
     await cmd(sock, `MAIL FROM:<${envelopeFrom}>`, [250], TIMEOUT);
     await cmd(sock, `RCPT TO:<${to}>`, [250, 251], TIMEOUT);
@@ -160,7 +160,7 @@ export async function sendMail(cfg, { from, to, subject, text, replyTo }) {
 
     sock.write(headers + CRLF + CRLF + dotStuff(text.replace(/\n/g, CRLF)) + CRLF);
     await cmd(sock, ".", [250], 60_000);
-    try { await cmd(sock, "QUIT", [221], 5_000); } catch { /* nezaujima */ }
+    try { await cmd(sock, "QUIT", [221], 5_000); } catch { /* ignored */ }
     return { ok: true };
   } finally {
     sock.destroy();

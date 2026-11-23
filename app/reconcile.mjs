@@ -1,34 +1,34 @@
 /**
- * TrackGap — porovnavaci engine v2.
+ * TrackGap - reconciliation engine v2.
  *
- * Zmeny oproti v1 (po prvom behu na pilotnom obchode, 30.8.2026):
+ * Changes from v1:
  *
- * 1. GHOST FILTER. v1 hlasil ako "ghost" aj objednavky mladsie nez 48 h, ktore
- *    su v obchode aj v GA4 — len sa nedostali do porovnavanej mnoziny.
- *    Teraz sa ghosty hladaju proti VSETKYM objednavkam, nielen zrelym.
+ * 1. GHOST FILTER. v1 also reported orders younger than 48 h as "ghosts",
+ *    although they existed both in the store and in GA4; they just were not
+ *    in the compared set. Ghosts are now matched against ALL orders, not only
+ *    mature ones.
  *
- * 2. SYSTEMATICKY ROZDIEL V SUMACH. Na pilotnom obchode bol kazdy rozdiel presne 2,99 EUR
- *    (postovne) — cize GA4 dostava trzbu bez dopravy. To NIE JE chyba merania,
- *    ale v1 to hlasil ako 14,9 % stratenych trzieb a zbytocne strasil.
- *    Teraz sa rozlisuje:
- *      - konstantny rozdiel na objednavku  -> doprava/poplatok, INFO
- *      - konstantny pomer (napr. 1/1,23)   -> DPH, INFO
- *      - nahodny rozptyl                   -> skutocny problem, NALEZ
+ * 2. SYSTEMATIC VALUE DIFFERENCES. In testing, every difference was exactly
+ *    2.99 EUR (shipping), i.e. GA4 received revenue without shipping. That is
+ *    NOT a tracking error, but v1 reported it as 14.9 % lost revenue and
+ *    raised a false alarm. Now we distinguish:
+ *      - constant difference per order  -> shipping/fee, INFO
+ *      - constant ratio (e.g. 1/1.23)    -> VAT, INFO
+ *      - random spread                   -> real problem, FINDING
  */
 
 /**
- * Ako stara musi byt objednavka, nez ju porovname s GA4.
+ * How old an order must be before it is compared with GA4.
  *
- * GA4 udava az 48 h na uplnu konsolidaciu, ale realne su transakcie v API
- * do niekolkych minut. Karlo 31.8.2026: okno uplne vypnute, aby bolo vidiet
- * vysledok hned (screencast pre App Store review). Ak sa v produkcii ukaze,
- * ze cerstve objednavky generuju falosne "missing", vratit na 4 h cez
- * TRACKGAP_MIN_AGE_HOURS — kod to podporuje bez zasahu.
+ * GA4 states up to 48 h for full consolidation, but in practice transactions
+ * show up in the API within minutes. The window is disabled by default so
+ * results are visible immediately. If fresh orders start producing false
+ * "missing" results, set TRACKGAP_MIN_AGE_HOURS (e.g. 4); no code change needed.
  */
 const MIN_AGE_HOURS = Number(process.env.TRACKGAP_MIN_AGE_HOURS ?? 0);
 const VAT_RATES = [1.10, 1.19, 1.20, 1.21, 1.22, 1.23, 1.25, 1.27];
 
-/** Median — odolnejsi voci vychylkam nez priemer. */
+/** Median: more robust to outliers than the mean. */
 function median(xs) {
   if (!xs.length) return 0;
   const s = [...xs].sort((a, b) => a - b);
@@ -37,23 +37,25 @@ function median(xs) {
 }
 
 /**
- * Zisti, ktorej hodnote z objednavky zodpoveda to, co dorazilo do GA4.
+ * Determines which order value matches what arrived in GA4.
  *
- * v1 hadala z rozdielu a na pilotnom obchode (postovne vzdy 2,99) to vyslo pekne.
- * Lenze doprava byva premenliva — kurier vs vydajne miesto, zdarma nad limit,
- * ine krajiny. Vtedy by v1 videla nahodny rozptyl a zbytocne strasila.
+ * v1 guessed from the difference, which worked while shipping was always the
+ * same. But shipping varies (courier vs pickup point, free above a threshold,
+ * other countries), and v1 would then see a random spread and raise a false
+ * alarm.
  *
- * v2 uz nehada: Shopify vracia subtotal, shipping a tax zvlast, tak sa GA4
- * hodnota porovna proti kazdemu kandidatovi a vyhra ten, ktory sedi najcastejsie.
+ * v2 no longer guesses: Shopify returns subtotal, shipping and tax
+ * separately, so the GA4 value is compared against each candidate and the
+ * one that matches most often wins.
  */
 const CANDIDATES = [
-  { key: "total",             label: "celá suma vrátane dopravy a DPH",
+  { key: "total",             label: "value is the full total incl. shipping and VAT",
     fn: (o) => o.total },
   { key: "subtotal",          label: "value excludes shipping",
     fn: (o) => o.subtotal },
   { key: "total_minus_tax",   label: "value excludes VAT (shipping included)",
     fn: (o) => o.total - o.tax },
-  { key: "subtotal_minus_tax",label: "value excludes shipping aj bez DPH",
+  { key: "subtotal_minus_tax",label: "value excludes shipping and VAT",
     fn: (o) => o.subtotal - o.tax },
   { key: "total_minus_ship",  label: "value excludes shipping",
     fn: (o) => o.total - o.shipping },
@@ -64,7 +66,7 @@ export function analyseValueGap(pairs) {
   const usable = pairs.filter((p) => p.ga4 > 0 && p.order.total > 0);
   if (usable.length < 3) return { kind: "unknown", confidence: 0 };
 
-  // ktory kandidat sedi na najviac objednavok (tolerancia 1 cent)
+  // which candidate matches the most orders (1 cent tolerance)
   const scored = CANDIDATES.map((c) => {
     let hits = 0;
     for (const p of usable) {
@@ -83,10 +85,10 @@ export function analyseValueGap(pairs) {
         matched: best.key,
         confidence: +best.ratio.toFixed(2),
         note: "GA4 values match the full order total. Revenue reporting "
-            + "je v poriadku.",
+            + "is fine.",
       };
     }
-    // sedi, ale na inu zlozku — systematicke, nie chyba
+    // matches, but a different component: systematic, not an error
     const avgDiff = usable.reduce(
       (s, p) => s + (p.order.total - p.ga4), 0) / usable.length;
     return {
@@ -94,13 +96,13 @@ export function analyseValueGap(pairs) {
       matched: best.key,
       confidence: +best.ratio.toFixed(2),
       avg_diff: +avgDiff.toFixed(2),
-      note: `Do GA4 chodí ${best.label}. Celková suma objednávky je v priemere `
-          + `o ${avgDiff.toFixed(2)} vyššia. Nie je to strata dát — ale reporty `
+      note: `GA4 does not receive the full order total (${best.label}). The order total is on average `
+          + `${avgDiff.toFixed(2)} higher. This is not data loss, but reports `
           + "in GA4 and in your store will never match until this is aligned.",
     };
   }
 
-  // ziadny kandidat nesedi konzistentne -> pozri, ci aspon nie je konstantny pomer
+  // no candidate matches consistently -> check for at least a constant ratio
   const ratios = usable.map((p) => p.order.total / p.ga4);
   const med = median(ratios);
   const sameRatio = ratios.filter((r) => Math.abs(r - med) < 0.01).length;
@@ -112,13 +114,13 @@ export function analyseValueGap(pairs) {
       vat_rate: vat ? +((vat - 1) * 100).toFixed(0) : null,
       confidence: +(sameRatio / usable.length).toFixed(2),
       note: vat
-        ? `Pomer súm sedí na DPH ${((vat - 1) * 100).toFixed(0)} %. Do GA4 `
+        ? `The amount ratio matches ${((vat - 1) * 100).toFixed(0)} % VAT. GA4 `
           + "receives the price without VAT while your store reports it with VAT."
-        : `Sumy sa líšia konštantným pomerom ${med.toFixed(3)}.`,
+        : `Amounts differ by a constant ratio of ${med.toFixed(3)}.`,
     };
   }
 
-  // naozaj nekonzistentne
+  // genuinely inconsistent
   const diffs = usable.map((p) => Math.abs(p.order.total - p.ga4));
   return {
     kind: "inconsistent",
@@ -126,39 +128,40 @@ export function analyseValueGap(pairs) {
     best_ratio: +best.ratio.toFixed(2),
     median_diff: +median(diffs).toFixed(2),
     confidence: 1,
-    note: "GA4 values do not consistently match any part of the order — "
+    note: "GA4 values do not consistently match any part of the order - "
         + "not the total, not the amount without shipping, not without VAT. "
         + "Revenue in GA4 is unreliable.",
   };
 }
 
 /**
- * Rozdeli chybajuce objednavky podla toho, KDE sa retazec pretrhol.
+ * Splits missing orders by WHERE the chain broke.
  *
- * Toto je jadro hodnoty produktu. Samotne "18 % objednaviek chyba v GA4"
- * merchantovi nepovie, co ma opravit. Vrstvy su tri:
+ * This is the core of the product's value. "18 % of orders are missing in
+ * GA4" alone does not tell the merchant what to fix. There are three layers:
  *
- *   Shopify (objednavka existuje) -> nas pixel (odislo z prehliadaca)
- *                                 -> GA4 (dorazilo do analytiky)
+ *   Shopify (order exists) -> our pixel (left the browser)
+ *                          -> GA4 (reached analytics)
  *
- *   pixel ANO  + GA4 NIE  = event sa odpalil, ale do GA4 nedorazil.
- *                           Chyba je v GA4 tagu/konfiguracii alebo ho nieco
- *                           blokuje. `delivery_broken`
- *   pixel NIE  + GA4 NIE  = event sa vobec neodpalil. Chyba je na webe —
- *                           theme, consent banner, GTM trigger. `never_fired`
- *   pixel neaktivny       = objednavka je spred instalacie appky, alebo pixel
- *                           nebezi. Nevieme rozhodnut, NEHADAME. `unknown`
+ *   pixel YES + GA4 NO   = the event fired but never reached GA4.
+ *                          The GA4 tag/configuration is broken or something
+ *                          blocks it. `delivery_broken`
+ *   pixel NO  + GA4 NO   = the event never fired. The problem is on the site:
+ *                          theme, consent banner, GTM trigger. `never_fired`
+ *   pixel inactive       = the order predates the app install, or the pixel
+ *                          is not running. We cannot tell, so we DO NOT GUESS.
+ *                          `unknown`
  *
- * `pixel.since` je cas prveho eventu od pixelu. Vsetko starsie pixel nikdy
- * nevidel, takze sa NESMIE ratat ako "never_fired" — inak by sme merchantovi
- * nahlasili poruchu, ktora neexistuje.
+ * `pixel.since` is the time of the first pixel event. The pixel never saw
+ * anything older, so it must NOT count as "never_fired"; otherwise we would
+ * report a failure to the merchant that does not exist.
  */
 function classifyMissing(missing, pixel) {
   const out = {
-    never_fired: 0,        // pixel ani GA4 -> rozbity web/consent/trigger
-    delivery_broken: 0,    // pixel ano, GA4 nie -> rozbite dorucenie do GA4
-    before_pixel: 0,       // spred instalacie appky, neda sa posudit
-    unknown: 0,            // pixel nebezi vobec
+    never_fired: 0,        // neither pixel nor GA4 -> broken site/consent/trigger
+    delivery_broken: 0,    // pixel yes, GA4 no -> broken delivery to GA4
+    before_pixel: 0,       // before the app was installed, cannot be judged
+    unknown: 0,            // pixel not running at all
     never_fired_ids: [],
     delivery_broken_ids: [],
   };
@@ -166,8 +169,8 @@ function classifyMissing(missing, pixel) {
     out.unknown = missing.length;
     return out;
   }
-  // SQLite datetime('now') je UTC bez zony — bez 'Z' by sa to citalo ako
-  // lokalny cas a hranica by sa posunula o 2 h (CEST).
+  // SQLite datetime('now') is UTC without a zone; without 'Z' it would be read
+  // as local time and the boundary would shift by 2 h (CEST).
   const since = pixel.since
     ? new Date(pixel.since.replace(" ", "T") + "Z").getTime()
     : null;
@@ -196,7 +199,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
   const skipped = orders.length - ripe.length;
 
   const ga4Map = new Map(ga4.map((g) => [String(g.transaction_id), g]));
-  // OPRAVA: ghosty proti VSETKYM objednavkam, nie len zrelym
+  // FIX: ghosts are checked against ALL orders, not only mature ones
   const allOrderIds = new Set(orders.map((o) => String(o.order_id)));
 
   const missing = ripe.filter((o) => !ga4Map.has(String(o.order_id)));
@@ -208,7 +211,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
   const otherRows = ga4.filter((g) =>
     String(g.transaction_id).toLowerCase().includes("(other)"));
 
-  // sparovane sumy — len objednavky, ktore su v oboch
+  // matched amounts: only orders present in both
   const pairs = [];
   for (const o of ripe) {
     const g = ga4Map.get(String(o.order_id));
@@ -227,11 +230,11 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
   }
   const missingPct = ripe.length ? (missing.length / ripe.length) * 100 : 0;
 
-  // Rozdelenie chybajucich podla PRICINY. Bez toho merchant nevie, ci ma
-  // opravovat meranie, alebo ci je to len bezne odmietnutie cookies.
+  // Split missing orders by CAUSE. Without this the merchant cannot tell
+  // whether to fix tracking or whether it is just ordinary cookie refusal.
   //
-  // POZOR: pocitame len AGREGAT. Ziadne osobne udaje, ziadne odosielanie —
-  // objednavka bez suhlasu sa NIKDY nedoplna do GA4 ani inam.
+  // NOTE: we only compute an AGGREGATE. No personal data, nothing is sent;
+  // an order without consent is NEVER backfilled to GA4 or anywhere else.
   let noConsent = 0;
   let noIdentity = 0;
   let real = 0;
@@ -246,18 +249,18 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
     consent_declined: noConsent,
     no_identity: noIdentity,
     tracking_broken: real,
-    // percenta z porovnavanych objednavok
+    // percentages of compared orders
     consent_pct: ripe.length ? +((noConsent / ripe.length) * 100).toFixed(1) : 0,
     broken_pct: ripe.length ? +((real / ripe.length) * 100).toFixed(1) : 0,
   };
 
   const findings = [];
-  // Kde presne sa retazec pretrhol — tretia vrstva merania.
+  // Where exactly the chain broke: the third measurement layer.
   const layers = classifyMissing(missing, pixel);
 
   if (missing.length) {
-    // skutocna hodnota chybajucich objednavok — konkurencia to odhaduje
-    // z ad spendu, ktory si user zada rucne. My mame realne sumy zo Shopify.
+    // actual value of the missing orders, taken from real Shopify amounts
+    // rather than estimated from manually entered ad spend
     const lostRevenue = missing.reduce((s, o) => s + (o.total || 0), 0);
     findings.push({
       type: "missing",
@@ -274,8 +277,8 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
     });
   }
 
-  // Samostatny nalez pre kazdu z dvoch pricin — maju INU opravu, takze ich
-  // merchant musi vidiet oddelene, nie ako jedno cislo "chyba 18 %".
+  // A separate finding for each of the two causes: they have DIFFERENT fixes,
+  // so the merchant must see them separately, not as one "18 % missing" number.
   if (layers.delivery_broken > 0) {
     findings.push({
       type: "delivery_broken",
@@ -285,7 +288,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
         order_numbers: layers.delivery_broken_ids,
         note: "These orders DID fire a purchase event in the browser, but GA4 "
             + "never recorded them. The event is leaving the browser and "
-            + "getting lost on the way — check your GA4 tag configuration, "
+            + "getting lost on the way - check your GA4 tag configuration, "
             + "the measurement ID it sends to, and anything blocking the "
             + "request.",
       },
@@ -299,7 +302,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
       detail: {
         order_numbers: layers.never_fired_ids,
         note: "No purchase event fired in the browser at all for these orders. "
-            + "The problem is on the storefront — a broken thank-you page "
+            + "The problem is on the storefront - a broken thank-you page "
             + "trigger, a consent banner blocking the tag, or a GTM rule that "
             + "never matches.",
       },
@@ -330,7 +333,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
     });
   }
 
-  // rozdiel v trzbach hlasime len ked NIE JE systematicky
+  // a revenue gap is reported only when it is NOT systematic
   if (valueGap.kind === "inconsistent" && Math.abs(revGapPct) > 10) {
     findings.push({
       type: "revenue_gap",
@@ -345,7 +348,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
     });
   } else if (valueGap.kind !== "unknown" && valueGap.kind !== "inconsistent"
              && valueGap.kind !== "match") {
-    // systematicky rozdiel = informacia, nie poplach
+    // systematic difference = information, not an alarm
     findings.push({
       type: "value_note",
       severity: "info",
@@ -371,7 +374,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
       count: otherRows.length,
       detail: {
         note: "GA4 has started aggregating transactions into '(other)'. "
-            + "Exact matching is no longer possible — a BigQuery export "
+            + "Exact matching is no longer possible - a BigQuery export "
             + "is required.",
       },
     });
@@ -389,7 +392,7 @@ export function reconcile(orders, ga4, identityFor = null, pixel = null) {
       ghosts: ghosts.length,
       revenue_gap_pct: +revGapPct.toFixed(1),
       value_gap_kind: valueGap.kind,
-      // tretia vrstva: kde sa retazec pretrhol
+      // third layer: where the chain broke
       never_fired: layers.never_fired,
       delivery_broken: layers.delivery_broken,
       pixel_active: !!pixel?.active,

@@ -1,16 +1,16 @@
 /**
- * TrackGap — HTTP server.
+ * TrackGap - HTTP server.
  *
- * Bezi na loopbacku, reverse proxy (napr. Caddy) pred nim riesi TLS.
- * Ziadny framework: OAuth + par endpointov + jedna stranka.
+ * Runs on loopback; a reverse proxy in front (e.g. Caddy) handles TLS.
+ * No framework: OAuth + a few endpoints + one page.
  */
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
-// Pozn.: `shopToken` sa zamerne NEIMPORTUJE. Shopify vydava len hodinove
-// tokeny, takze kazde volanie Admin API musi ist cez `validToken()`, ktory
-// token pred pouzitim obnovi. Priamy `shopToken()` po hodine tichu vracal
-// expirovany token a volanie padlo na 401 (1.9.2026).
+// Note: `shopToken` is deliberately NOT imported. Shopify only issues
+// one-hour tokens, so every Admin API call must go through `validToken()`,
+// which refreshes the token before use. A direct `shopToken()` silently
+// returned an expired token after an hour and the call failed with 401.
 import {
   db, upsertShop, shopTokenInfo, encrypt, decrypt,
   markAccessBroken, clearAccessBroken, markShopSessionSeen, isStaleUninstall,
@@ -57,11 +57,11 @@ import {
 import { fetchAdsCampaigns, analyseAds, LIMITATIONS as ADS_LIMITS } from "./ads.mjs";
 
 /**
- * Kam sa vratit po OAuth callbacku.
+ * Where to return after the OAuth callback.
  *
- * Embedded appka zije vnutri Shopify adminu, takze relativne `/app?shop=…`
- * sa prelozi na `/apps/app?…` a skonci na 404 (1.9.2026). Spravna cesta je
- * vzdy `https://<shop>/admin/apps/<client_id>`.
+ * The embedded app lives inside the Shopify admin, so a relative
+ * `/app?shop=…` resolves to `/apps/app?…` and ends in a 404. The correct
+ * path is always `https://<shop>/admin/apps/<client_id>`.
  */
 function adminAppUrl(shop, params = "") {
   const host = String(shop).replace(/\.myshopify\.com$/, "") + ".myshopify.com";
@@ -72,8 +72,8 @@ function adminAppUrl(shop, params = "") {
 const PORT = process.env.PORT || 9310;
 const states = new Map();     // OAuth state -> {shop, ts}
 
-// Prebiehajuce checky na pozadi — jeden obchod nesmie mat dva naraz
-// (mrhalo by to GA4 kvotou a Shopify API limitmi).
+// Background checks in progress: one store must never run two at once
+// (it would waste GA4 quota and Shopify API limits).
 const checksInFlight = new Map();   // shop_id -> Promise
 
 function refreshInBackground(shop) {
@@ -84,13 +84,13 @@ function refreshInBackground(shop) {
   checksInFlight.set(shop.id, p);
 }
 
-/* ---------- ochrana /pixel/event (audit, bod 8) ----------
-   Endpoint sa vola zo storefrontu, takze nemoze byt za session tokenom.
-   Bez limitov by kdokolvek mohol nafuknut DB alebo podvrhnut gclid k cudzej
-   objednavke a prepisat tak priradenie konverzie. */
-const PIXEL_MAX_BODY = 8 * 1024;          // 8 KB staci s velkou rezervou
-const PIXEL_RATE_MAX = 60;                // poziadaviek na IP
-const PIXEL_RATE_WINDOW = 60_000;         // za minutu
+/* ---------- /pixel/event protection ----------
+   The endpoint is called from the storefront, so it cannot sit behind a
+   session token. Without limits anyone could bloat the DB or attach a forged
+   gclid to someone else's order and so rewrite conversion attribution. */
+const PIXEL_MAX_BODY = 8 * 1024;          // 8 KB is plenty
+const PIXEL_RATE_MAX = 60;                // requests per IP
+const PIXEL_RATE_WINDOW = 60_000;         // per minute
 const pixelHits = new Map();              // ip -> {count, resetAt}
 
 function pixelRateOk(ip) {
@@ -104,16 +104,16 @@ function pixelRateOk(ip) {
   return rec.count <= PIXEL_RATE_MAX;
 }
 
-// mapa nesmie rast donekonecna
+// the map must not grow forever
 setInterval(() => {
   const now = Date.now();
   for (const [ip, r] of pixelHits) if (now > r.resetAt) pixelHits.delete(ip);
 }, 5 * 60_000).unref?.();
 
 /**
- * Prepusti len polia, ktore naozaj pouzivame, a v ocakavanom formate.
- * Vracia null, ak z payloadu nie je pouzitelna ziadna identita — nema zmysel
- * ukladat prazdny riadok. Cely raw payload sa uz neuklada.
+ * Passes through only the fields we actually use, in the expected format.
+ * Returns null if the payload has no usable identity; there is no point in
+ * storing an empty row. The full raw payload is no longer stored.
  */
 function sanitizeIdentity(p) {
   const id = p.identity || p;
@@ -126,25 +126,25 @@ function sanitizeIdentity(p) {
   const out = {
     checkout_token: str(p.checkout_token, /^[A-Za-z0-9._-]+$/, 128),
     order_id: str(p.order_id ?? id.order_id, /^[A-Za-z0-9/._-]+$/, 64),
-    // GA4 client_id ma tvar <nahodne>.<timestamp>
+    // GA4 client_id has the form <random>.<timestamp>
     ga_client_id: str(id.ga_client_id, /^\d+\.\d+$/, 64),
     ga_session_id: str(id.ga_session_id, /^\d+$/, 32),
     gclid: str(id.gclid, /^[A-Za-z0-9_-]+$/, 200),
     fbclid: str(id.fbclid, /^[A-Za-z0-9_.-]+$/, 200),
     consent: str(id.consent, /^(granted|denied|unknown)$/i, 16),
-    // Shopify `clientId` — stabilny po celu navstevu vratane checkoutu.
-    // Je to jediny kluc, ktorym sa da spojit `page_viewed` (ma `_ga` cookie,
-    // nema token) s `checkout_completed` (ma token, `_ga` uz neprecita).
+    // Shopify `clientId`: stable for the whole visit including checkout.
+    // It is the only key that links `page_viewed` (has the `_ga` cookie,
+    // no token) with `checkout_completed` (has the token, cannot read `_ga`).
     shopify_client_id: str(p.client_id_shopify ?? id.client_id_shopify,
                            /^[A-Za-z0-9._:-]+$/, 128),
   };
 
-  // Ulozime aj zaznam BEZ identifikatorov, ak je naviazany na objednavku alebo
-  // checkout. Obchod nemusi mat GA4 vobec — vtedy `_ga` cookie neexistuje a
-  // ziadne client_id nie je co citat. Tento zaznam je dokaz, ze pixel bezal
-  // a ze objednavka realne nema com byt priradena (31.8.2026: predtym server
-  // vratil 400 a merchant nevidel rozdiel medzi "pixel nebezi" a
-  // "pixel bezi, ale nie je co zachytit").
+  // We also store a record WITHOUT identifiers if it is tied to an order or
+  // checkout. A store may not use GA4 at all; then there is no `_ga` cookie
+  // and no client_id to read. This record proves the pixel was running and
+  // that the order genuinely has nothing to be attributed by (previously the
+  // server returned 400 and the merchant could not tell "pixel not running"
+  // from "pixel running, but nothing to capture").
   const anchored = out.checkout_token || out.order_id;
   const usable = out.ga_client_id || out.gclid || out.fbclid
     || out.shopify_client_id;
@@ -152,15 +152,15 @@ function sanitizeIdentity(p) {
 }
 
 /**
- * Udalost z pixelu ako DOKAZ merania (tretia vrstva).
+ * Pixel event as PROOF of measurement (third layer).
  *
- * sanitizeIdentity() rieši identifikatory na doplnanie konverzii; toto je iny
- * ucel: zaznamenat, ZE event opustil prehliadac. Preto vlastna validacia —
- * suma a mena sa do identit vobec neukladaju.
+ * sanitizeIdentity() handles identifiers for conversion backfill; this has a
+ * different purpose: recording THAT the event left the browser. Hence its own
+ * validation; amount and currency are never stored with identities.
  */
 function sanitizePixelEvent(p) {
   const type = String(p.type || "");
-  // ukladame len to, co ma vypovednu hodnotu o konverzii
+  // store only what says something about the conversion
   if (!["purchase", "checkout_started"].includes(type)) return null;
 
   const token = typeof p.checkout_token === "string"
@@ -205,12 +205,12 @@ const WEBHOOK_BODY_LIMIT = 2 * 1024 * 1024;
 class PayloadTooLargeError extends Error {}
 
 /**
- * Appka stratila pristup k zdroju dat (Shopify token, Google ucet).
+ * The app lost access to a data source (Shopify token, Google account).
  *
- * Vlastny typ preto, aby sa strata pristupu dala odlisit od skutocnej chyby
- * v kode. Tieto dve veci maju uplne iny nasledok: chybu opravujeme my,
- * odpojeny ucet vie napravit LEN merchant — a preto sa o nom musi dozvediet.
- * Predtym oboje skoncilo ako `internal error` 500 a splynulo.
+ * A dedicated type so that lost access can be told apart from a real bug in
+ * the code. The two have entirely different consequences: we fix bugs, but
+ * ONLY the merchant can fix a disconnected account, so they must be told.
+ * Previously both ended up as a 500 `internal error` and were indistinguishable.
  */
 class AccessError extends Error {
   constructor(kind, message) {
@@ -220,17 +220,17 @@ class AccessError extends Error {
 }
 
 /**
- * Appka este NIE JE NASTAVENA — chyba krok onboardingu.
+ * The app is NOT SET UP yet: an onboarding step is missing.
  *
- * Zamerne to NIE JE AccessError. Strata pristupu znamena "fungovalo to
- * a prestalo"; toto znamena "este sa nezacalo". Merchantovi treba povedat
- * uplne ine vety a appka si to NESMIE zapisat ako vlastnu poruchu — z takeho
- * zaznamu po case dozreje poplasny e-mail o strate pristupu, ktora nikdy
- * nenastala.
+ * Deliberately NOT an AccessError. Lost access means "it worked and
+ * stopped"; this means "it has not started yet". The merchant needs to hear
+ * something entirely different, and the app must NOT record this as its own
+ * failure; such a record would eventually turn into an alarm e-mail about
+ * lost access that never happened.
  *
- * Cerstvo nainstalovany obchod je presne ten stav, v ktorom appku vidi
- * reviewer zo Shopify. Doteraz na nom `/check` vracal 500 "internal error"
- * (chybajuca GA4 property), co vyzera ako rozbita appka.
+ * A freshly installed store is exactly the state in which a Shopify reviewer
+ * sees the app. Previously `/check` returned 500 "internal error" there
+ * (missing GA4 property), which looks like a broken app.
  */
 class SetupError extends Error {
   constructor(step, message) {
@@ -259,16 +259,16 @@ const server = http.createServer(async (req, res) => {
   const q = Object.fromEntries(url.searchParams);
 
   /**
-   * Domena obchodu overena session tokenom. `?shop=` sa na autorizaciu
-   * NEPOUZIVA — pred touto zmenou stacilo poznat domenu obchodu na citanie
-   * trzieb a prepisanie Measurement ID.
+   * Store domain verified by the session token. `?shop=` is NOT used for
+   * authorization; before this change, knowing a store's domain was enough to
+   * read its revenue and overwrite its Measurement ID.
    *
-   * Vracia null, ak volajuci nie je overeny. Kazdy merchant endpoint musi
-   * zavolat requireShop() a pri null skoncit s 401.
+   * Returns null if the caller is not verified. Every merchant endpoint must
+   * call requireShop() and respond with 401 on null.
    */
   const authShop = () => authenticatedShop(req, url) || devShopOverride(url);
-  // Overeny session token tejto poziadavky. Posiela sa do `validToken()`, aby
-  // sa dal pri managed installation vymenit za access token.
+  // Verified session token of this request. Passed to `validToken()` so it
+  // can be exchanged for an access token under managed installation.
   const sessionToken = sessionTokenFrom(req, url);
   const requireShop = () => {
     const s = authShop();
@@ -290,7 +290,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, ts: new Date().toISOString() });
     }
 
-    // --- inštalácia: /auth?shop=xyz.myshopify.com ---
+    // --- installation: /auth?shop=xyz.myshopify.com ---
     if (url.pathname === "/auth") {
       if (!validShop(q.shop)) return send(res, 400, { error: "invalid shop" });
       const state = crypto.randomBytes(16).toString("hex");
@@ -308,15 +308,16 @@ const server = http.createServer(async (req, res) => {
       }
       states.delete(q.state);
       const t = await exchangeToken(q.shop, q.code);
-      // Shopify uz vydava len expirujuce tokeny — ukladame aj refresh_token
+      // Shopify only issues expiring tokens now, so the refresh_token is stored too
       upsertShop(q.shop, t.access_token, t.refresh_token || null,
                  t.expires_in || null, true);
       // Webhook subscriptions are app-managed in shopify.app.toml. Registering
       // them again per installation creates duplicate deliveries and lets a
       // failed background registration go unnoticed.
-      // Aktivuj web pixel — bez neho nemame GA4 client_id.
-      // Measurement ID MUSI ist so sebou: pri reinstalacii by sa inak prepisalo
-      // na "not-set", pixel by nenasiel _ga_<ID> cookie a prestal by posielat.
+      // Activate the web pixel; without it we have no GA4 client_id.
+      // The Measurement ID MUST be passed along: on reinstall it would otherwise
+      // be overwritten with "not-set", the pixel would not find the _ga_<ID>
+      // cookie and would stop sending.
       const mid = db.prepare(
         "SELECT mp_measurement_id FROM shops WHERE shop_domain=?",
       ).get(q.shop)?.mp_measurement_id || null;
@@ -324,11 +325,11 @@ const server = http.createServer(async (req, res) => {
         .then((r) => console.log("web pixel:", JSON.stringify(r)))
         .catch((e) => console.error("web pixel:", e.message));
 
-      // Casova zona obchodu uz pri instalacii. Scheduler podla nej urcuje,
-      // kedy je v obchode 7:00 — bez nej by prva denna kontrola bezala v UTC,
-      // teda pre vacsinu sveta v nevhodnu hodinu. Cakat na to, kym niekto
-      // otvori dashboard, sa neda: prave merchant, ktory do appky nechodi,
-      // ma alert dostat (1.9.2026).
+      // Store time zone right at install. The scheduler uses it to decide
+      // when it is 7:00 in the store; without it the first daily check would
+      // run in UTC, i.e. at an awkward hour for most of the world. Waiting
+      // until someone opens the dashboard is not an option: precisely the
+      // merchant who does not open the app should get the alert.
       shopInfo(q.shop, t.access_token)
         .then((info) => db.prepare(
           `UPDATE shops SET primary_domain=COALESCE(?,primary_domain),
@@ -338,20 +339,20 @@ const server = http.createServer(async (req, res) => {
            WHERE shop_domain=?`).run(
           info.primary_domain || null, info.name || null,
           info.timezone || null, info.currency || null, q.shop))
-        .catch((e) => console.error("shopInfo pri instalacii:", e.message));
-      // Po instalacii patri merchant do Shopify adminu, nie na nasu domenu.
-      // Embedded appka sa otvara cez /admin/apps/<client_id> — vlastne /app
-      // by ho vyhodilo mimo admin a bez session tokenu skoncil na 404
-      // (1.9.2026: presne to sa dialo pri natacani screencastu).
+        .catch((e) => console.error("shopInfo on install:", e.message));
+      // After install the merchant belongs in the Shopify admin, not on our
+      // domain. The embedded app opens via /admin/apps/<client_id>; our own
+      // /app would take them out of the admin and, without a session token,
+      // end in a 404.
       res.writeHead(302, { Location: adminAppUrl(q.shop) });
       return res.end();
     }
 
-    // --- prijem udalosti z web pixelu ---
-    // --- App Proxy: /apps/trackgap/event na domene obchodu ---
-    // Shopify sem preposle poziadavku zo storefrontu. Ide o first-party cestu,
-    // takze ju neblokuju adblockery ani ITP. Podpis MUSI sediet — inak by
-    // tadialto mohol ktokolvek posielat cudzie data.
+    // --- receiving events from the web pixel ---
+    // --- App Proxy: /apps/trackgap/event on the store domain ---
+    // Shopify forwards the storefront request here. It is a first-party path,
+    // so ad blockers and ITP do not block it. The signature MUST match;
+    // otherwise anyone could send foreign data through it.
     if (url.pathname === "/proxy/event" && req.method === "POST") {
       if (!verifyProxySignature(q)) {
         return send(res, 401, { error: "bad signature" });
@@ -372,9 +373,9 @@ const server = http.createServer(async (req, res) => {
       const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shopDomain);
       if (!s) return send(res, 404, { error: "unknown shop" });
 
-      // Dokaz merania sa uklada NEZAVISLE od identity: objednavka bez GA4
-      // cookie ziadnu pouzitelnu identitu nema, ale prave vtedy je informacia
-      // "purchase event odisiel z prehliadaca" najcennejsia.
+      // Measurement proof is stored INDEPENDENTLY of identity: an order without
+      // a GA4 cookie has no usable identity, but that is exactly when
+      // "the purchase event left the browser" is most valuable.
       const ev = sanitizePixelEvent(p);
       if (ev) recordPixelEvent(s.id, ev);
       const clean = sanitizeIdentity(p);
@@ -383,10 +384,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
-    // --- web pixel: prijem identity zo storefrontu ---
-    // CORS: pixel bezi na domene obchodu, takze ide o cross-origin request.
-    // Bez odpovede na OPTIONS prehliadac skutocny POST vobec neodosle —
-    // prejavilo sa to ako "404 OPTIONS" v logu a 0 identit v DB (31.8.2026).
+    // --- web pixel: receiving identity from the storefront ---
+    // CORS: the pixel runs on the store domain, so this is a cross-origin
+    // request. Without an OPTIONS response the browser never sends the actual
+    // POST (it showed up as "404 OPTIONS" in the log and 0 identities in the DB).
     if (url.pathname === "/pixel/event" && req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
@@ -398,9 +399,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/pixel/event" && req.method === "POST") {
-      // Endpoint je zamerne bez autentifikacie — vola sa zo storefrontu, kde
-      // ziadny session token neexistuje. Preto tu musia byt vlastne mantinely
-      // (audit, bod 8): limit velkosti, rate limit a validacia formatu.
+      // The endpoint is deliberately unauthenticated: it is called from the
+      // storefront, where no session token exists. Hence its own guard rails:
+      // size limit, rate limit and format validation.
       const len = Number(req.headers["content-length"] || 0);
       if (len > PIXEL_MAX_BODY) {
         return send(res, 413, { error: "payload too large" });
@@ -427,9 +428,9 @@ const server = http.createServer(async (req, res) => {
       const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(p.shop);
       if (!s) return send(res, 404, { error: "unknown shop" });
 
-      // Tretia vrstva merania: zaznam, ze event realne opustil prehliadac.
-      // Uklada sa aj vtedy, ked z payloadu nie je ziadna identita — inak by
-      // sme prisli prave o dokaz pri objednavkach bez GA4 cookie.
+      // Third measurement layer: a record that the event actually left the
+      // browser. Stored even when the payload has no identity; otherwise we
+      // would lose exactly the proof for orders without a GA4 cookie.
       const ev = sanitizePixelEvent(p);
       if (ev) recordPixelEvent(s.id, ev);
 
@@ -437,7 +438,7 @@ const server = http.createServer(async (req, res) => {
       if (clean) saveIdentity(s.id, clean);
       if (!ev && !clean) return send(res, 400, { error: "no usable payload" });
 
-      // pixel nesmie cakat — odpovedame hned
+      // the pixel must not wait: respond immediately
       res.writeHead(200, {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
@@ -445,7 +446,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true }));
     }
 
-    // --- Shopify webhooky (GDPR + orders) ---
+    // --- Shopify webhooks (GDPR + orders) ---
     if (url.pathname.startsWith("/webhooks/")) {
       if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
       const body = await rawBody(req, WEBHOOK_BODY_LIMIT);
@@ -456,9 +457,9 @@ const server = http.createServer(async (req, res) => {
       const shop = req.headers["x-shopify-shop-domain"];
       const webhookId = req.headers["x-shopify-webhook-id"];
 
-      // orders/create — near-real-time doplnenie
+      // orders/create: near-real-time backfill
       if (topic.startsWith("orders/") && shop) {
-        // Shopify negarantuje poradie ani jedinecnost -> dedupe cez webhook id
+        // Shopify guarantees neither order nor uniqueness -> dedupe by webhook id
         const seen = webhookId && db.prepare(
           "SELECT 1 FROM webhook_log WHERE webhook_id = ?").get(webhookId);
         if (!seen) {
@@ -466,9 +467,9 @@ const server = http.createServer(async (req, res) => {
             db.prepare("INSERT OR IGNORE INTO webhook_log (webhook_id, topic) VALUES (?,?)")
               .run(webhookId, topic);
           }
-          // Spracuj na pozadi, Shopify ma 5 s timeout.
-          // JSON.parse MUSI byt vnutri async funkcie — mimo nej by neodchytena
-          // vynimka zhodila cely proces (audit, bod 9).
+          // Process in the background; Shopify has a 5 s timeout.
+          // JSON.parse MUST be inside the async function; outside it an
+          // uncaught exception would crash the whole process.
           setImmediate(() => (async () => {
             const payload = JSON.parse(body);
             await handleOrderWebhook(shop, payload);
@@ -506,8 +507,8 @@ const server = http.createServer(async (req, res) => {
           console.log(`ignored stale uninstall: ${shop} (${triggeredAt})`);
           return send(res, 200, { ok: true });
         }
-        // Tokeny a tajomstva mazeme HNED, nie az o 48 h pri shop/redact —
-        // po odinstalovani na ne uz nemame pravny dovod (audit, bod 6).
+        // Tokens and secrets are deleted IMMEDIATELY, not 48 h later on
+        // shop/redact; after uninstall we have no legal basis to keep them.
         db.prepare(`UPDATE shops SET uninstalled_at = datetime('now'),
                     access_token_enc = NULL,
                     google_refresh_enc = NULL,
@@ -518,36 +519,36 @@ const server = http.createServer(async (req, res) => {
         if (s) {
           for (const t of ["meta_oauth", "meta_config"]) {
             try { db.prepare(`DELETE FROM ${t} WHERE shop_id = ?`).run(s.id); }
-            catch { /* tabulka nemusi existovat */ }
+            catch { /* table may not exist */ }
           }
         }
-        // Shopify pri odinstalovani ZRUSI predplatne na svojej strane. Ak si
-        // plan nechame v nasej DB, merchant po preinstalovani dostane platenu
-        // uroven zadarmo a appka uz nikdy nepoziada o schvalenie platby.
-        // Presne tento flow reviewer testuje (App Store req. 1.2.2).
+        // Shopify CANCELS the subscription on its side on uninstall. If we kept
+        // the plan in our DB, the merchant would get the paid tier for free
+        // after reinstalling and the app would never ask for payment approval
+        // again. Reviewers test exactly this flow (App Store req. 1.2.2).
         setPlan(shop, "free", null, "CANCELLED");
       }
 
       if (topic === "shop/redact" && shop) {
         const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shop);
         if (s) {
-          // vsetky tabulky viazane na obchod — predtym tu chybali
-          // subscriptions, meta_* a meta_daily (audit, bod 6)
+          // all store-bound tables; subscriptions, meta_* and meta_daily
+          // used to be missing here
           for (const t of ["orders", "pixel_events", "ga4_events", "findings",
                            "identities", "backfills", "check_history", "alerts",
                            "check_cache", "subscriptions", "meta_oauth",
                            "meta_config", "meta_daily", "privacy_requests",
                            "kv_cache"]) {
             try { db.prepare(`DELETE FROM ${t} WHERE shop_id = ?`).run(s.id); }
-            catch { /* tabulka nemusi existovat */ }
+            catch { /* table may not exist */ }
           }
           db.prepare("DELETE FROM shops WHERE id = ?").run(s.id);
         }
       }
 
-      // Zakaznicke udaje neukladame (PCD Level 1 — ziadne meno, mail, adresa).
-      // Drzime vsak pseudonymne identifikatory (GA4 client_id, gclid) viazane
-      // na order_id, takze customers/redact ich musi zmazat (audit, bod 6).
+      // We do not store customer data (PCD Level 1: no name, e-mail, address).
+      // We do keep pseudonymous identifiers (GA4 client_id, gclid) tied to
+      // order_id, so customers/redact must delete them.
       if (topic === "customers/redact" && shop) {
         const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shop);
         if (s) {
@@ -562,7 +563,7 @@ const server = http.createServer(async (req, res) => {
               db.prepare("DELETE FROM backfills WHERE shop_id=? AND order_id=?")
                 .run(s.id, oid);
             }
-            console.log(`customers/redact: ${shop}, ${ids.length} objednavok`);
+            console.log(`customers/redact: ${shop}, ${ids.length} orders`);
           } catch (e) {
             console.error("customers/redact:", e.message);
           }
@@ -608,10 +609,10 @@ const server = http.createServer(async (req, res) => {
     }
 
 
-    // --- pripojenie GA4 ---
+    // --- GA4 connection ---
     if (url.pathname === "/ga4/connect") {
-      // OAuth start musi byt overeny — inak si utocnik pripoji vlastny
-      // Google ucet k cudziemu obchodu
+      // The OAuth start must be verified; otherwise an attacker could attach
+      // their own Google account to someone else's store
       const shop = requireShop();
       if (!shop) return;
       const state = crypto.randomBytes(16).toString("hex");
@@ -625,7 +626,7 @@ const server = http.createServer(async (req, res) => {
       const st = states.get(q.state);
       if (!st) return send(res, 401, { error: "bad state" });
       states.delete(q.state);
-      // pouzivatel mohol pripojenie odmietnut — nesmie to skoncit chybou 500
+      // the user may have declined the connection; that must not end in a 500
       if (q.error) {
         res.writeHead(302, {
           Location: adminAppUrl(st.shop, "ga4=denied"),
@@ -633,9 +634,9 @@ const server = http.createServer(async (req, res) => {
         return res.end();
       }
       const tok = await googleExchange(q.code, `${config.app_url}/ga4/callback`);
-      // Pripojenie Google zaroven rusi zaznam o strate pristupu — inak by
-      // banner ostal svietit aj po tom, co merchant urobil presne to,
-      // o co sme ho ziadali.
+      // Connecting Google also clears the lost-access record; otherwise the
+      // banner would stay on even after the merchant did exactly what we
+      // asked them to do.
       db.prepare(`UPDATE shops SET google_refresh_enc = ?,
                     ga4_connected_at = COALESCE(ga4_connected_at, CURRENT_TIMESTAMP),
                     access_broken_kind = NULL, access_broken_since = NULL,
@@ -649,14 +650,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- CORS preflight ---
-    // (rieseny vyssie pri /pixel/event)
+    // (handled above at /pixel/event)
 
-    // --- prehlad bez GA4 ---
-    // Co vieme povedat hned po instalacii, bez akehokolvek pripojenia:
-    // kolko objednavok obchod ma a kolko z nich vobec MOZE byt spravne
-    // priradenych (maju client_id a suhlas). Bez tohto videl merchant po
-    // instalacii prazdnu obrazovku a ziadal sa od neho OAuth skor, nez
-    // dostal akukolvek hodnotu.
+    // --- overview without GA4 ---
+    // What we can say right after install, without any connection: how many
+    // orders the store has and how many of them CAN be attributed correctly
+    // at all (they have a client_id and consent). Without this the merchant
+    // saw an empty screen after install and was asked for OAuth before
+    // getting any value.
     if (url.pathname === "/overview") {
       const shop = requireShop();
       if (!shop) return;
@@ -666,20 +667,20 @@ const server = http.createServer(async (req, res) => {
       const days = Math.min(Number(q.days) || 30, 90);
       const since = new Date(Date.now() - days * 86400_000).toISOString();
 
-      // objednavky uz mame zo Shopify (webhooky + prvotny import)
+      // orders are already in from Shopify (webhooks + initial import)
       let orders = db.prepare(
         `SELECT COUNT(*) n, COALESCE(SUM(total),0) v FROM orders
          WHERE shop_id=? AND created_at >= ? AND COALESCE(cancelled,0)=0`,
       ).get(s.id, since);
 
-      // ak este nic nemame, dotiahneme ich teraz — merchant nema cakat
+      // if we have nothing yet, fetch them now; the merchant should not have to wait
       if (!orders.n) {
         const token = await validToken(shop, sessionToken);
         if (token) {
           try {
-            // poradie argumentov je (shop, token, sinceISO) — prehodene to
-            // stavalo URL z tokenu a padalo na "fetch failed" (10.9.2026).
-            // Nevsimli sme si to, lebo bez tokenu sa sem kod vobec nedostal.
+            // argument order is (shop, token, sinceISO); swapped, it built
+            // the URL from the token and failed with "fetch failed". It went
+            // unnoticed because without a token the code never got here.
             const fetched = await fetchOrders(shop, token, since);
             const ins = db.prepare(`INSERT OR REPLACE INTO orders
               (shop_id,order_id,order_number,total,subtotal,shipping,tax,
@@ -703,7 +704,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // co o nich vie pixel
+      // what the pixel knows about them
       const ident = db.prepare(
         `SELECT COUNT(DISTINCT o.order_id) n FROM orders o
          JOIN identities i ON i.shop_id=o.shop_id AND i.order_id=o.order_id
@@ -719,15 +720,15 @@ const server = http.createServer(async (req, res) => {
       const total = orders.n || 0;
       const withId = ident.n || 0;
 
-      // Menu berieme z objednavok, nie z nastaveni obchodu — je to mena,
-      // v ktorej zakaznik realne zaplatil.
+      // Currency is taken from orders, not store settings: it is the currency
+      // the customer actually paid in.
       const cur = db.prepare(
         `SELECT currency, COUNT(*) n FROM orders
          WHERE shop_id=? AND created_at >= ? AND currency IS NOT NULL
          GROUP BY currency ORDER BY n DESC LIMIT 1`,
       ).get(s.id, since);
 
-      // hodnota objednavok, ktore sa nedaju priradit
+      // value of orders that cannot be attributed
       const lost = db.prepare(
         `SELECT COALESCE(SUM(o.total),0) v FROM orders o
          WHERE o.shop_id=? AND o.created_at >= ? AND COALESCE(o.cancelled,0)=0
@@ -744,7 +745,7 @@ const server = http.createServer(async (req, res) => {
         currency: cur?.currency || s.currency || null,
         with_identity: withId,
         with_consent: consent.n || 0,
-        // objednavky, ktore uz teraz vieme, ze sa nedaju spolahlivo priradit
+        // orders we already know cannot be reliably attributed
         unattributable: Math.max(0, total - withId),
         unattributable_pct: total ? Math.round((total - withId) / total * 1000) / 10 : 0,
         ga4_connected: !!s.google_refresh_enc,
@@ -753,7 +754,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // --- stav obchodu: pouziva ho UI, aby nemusel vyberat property znova ---
+    // --- store state: used by the UI so the property need not be picked again ---
     if (url.pathname === "/state") {
       const shop = requireShop();
       if (!shop) return;
@@ -767,13 +768,14 @@ const server = http.createServer(async (req, res) => {
          FROM shops WHERE shop_domain = ?`).get(shop);
       if (!s) return send(res, 404, { error: "shop not found" });
 
-      // Domenu, casovu zonu a menu dotiahneme raz a ulozime.
+      // Domain, time zone and currency are fetched once and stored.
       //
-      // TIMEZONE JE DOLEZITA: scheduler podla nej urcuje, ci je v obchode
-      // DAILY_HOUR (7:00). Zapisoval sa vsak len `primary_domain` a `shop_name`,
-      // hoci `shopInfo()` zonu aj menu vracia — stlpec `shops.timezone` zostal
-      // NULL a `localHour()` padol na UTC. Merchantovi na zapadnom pobrezi USA
-      // by tak denna kontrola bezala o polnoci (1.9.2026).
+      // THE TIME ZONE MATTERS: the scheduler uses it to decide whether it is
+      // DAILY_HOUR (7:00) in the store. Only `primary_domain` and `shop_name`
+      // used to be written although `shopInfo()` also returns zone and
+      // currency; `shops.timezone` stayed NULL and `localHour()` fell back to
+      // UTC. A merchant on the US west coast would get the daily check at
+      // midnight.
       if (!s.primary_domain || !s.timezone) {
         const tok = await validToken(shop, sessionToken);
         if (tok) {
@@ -787,7 +789,7 @@ const server = http.createServer(async (req, res) => {
                 info.currency || null, shop);
             s.primary_domain = info.primary_domain;
             s.shop_name = info.name;
-          } catch { /* nie je kriticke */ }
+          } catch { /* not critical */ }
         }
       }
       return send(res, 200, {
@@ -796,35 +798,35 @@ const server = http.createServer(async (req, res) => {
         ga4_connected: !!s.ga4_connected,
         ga4_property_id: s.ga4_property_id,
         backfill_enabled: !!s.backfill_enabled,
-        // len ID, secret sa NIKDY nevracia von
+        // ID only; the secret is NEVER returned
         mp_measurement_id: s.mp_measurement_id || null,
         primary_domain: s.primary_domain,
         shop_name: s.shop_name,
-        // adresa pre alerty — UI podla nej vie, ci je onboarding dokonceny
+        // alert address: the UI uses it to know whether onboarding is complete
         alert_email: s.alert_email || null,
-        // Sama adresa nestaci: `unverified` znamena, ze sme na nu este nic
-        // nedorucili. Onboarding sa nesmie tvarit hotovo skor, nez vieme,
-        // ze sa kanal pre alerty da naozaj pouzit.
+        // The address alone is not enough: `unverified` means nothing has been
+        // delivered to it yet. Onboarding must not look finished before we
+        // know the alert channel actually works.
         alert_email_status: s.alert_email ? (s.alert_email_status || "unverified") : null,
         alert_email_error: s.alert_email_error || null,
         meta_oauth_available: isOAuthConfigured(),
         last_sync_at: s.last_sync_at,
-        // tretia vrstva merania — onboarding aj dashboard potrebuju vediet,
-        // ci pixel realne hlasi; bez neho vieme povedat len ZE nieco chyba,
-        // nie preco
+        // third measurement layer: onboarding and the dashboard need to know
+        // whether the pixel actually reports; without it we can only say THAT
+        // something is missing, not why
         pixel: pixelHealth(
           db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shop).id,
         ),
-        // Ked appka stratila pristup, MUSI to priznat hned na urovni stavu.
-        // Dashboard inak ukazoval posledny (uz neplatny) vysledok z cache
-        // a vyzeral presne ako appka, ktora vsetko strazi.
+        // When the app has lost access it MUST admit it right in the state.
+        // Otherwise the dashboard showed the last (no longer valid) cached
+        // result and looked exactly like an app that is watching everything.
         access_lost: s.access_broken_kind
           ? { kind: s.access_broken_kind, since: s.access_broken_since }
           : null,
       });
     }
 
-    // --- zoznam GA4 property ---
+    // --- GA4 property list ---
     if (url.pathname === "/ga4/properties") {
       const shop = requireShop();
       if (!shop) return;
@@ -840,39 +842,40 @@ const server = http.createServer(async (req, res) => {
       db.prepare("UPDATE shops SET ga4_property_id=? WHERE shop_domain=?")
         .run(q.property, shop);
       const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shop);
-      if (s) invalidate(s.id);     // zmena property -> stara cache uz neplati
+      if (s) invalidate(s.id);     // property changed -> old cache is no longer valid
       return send(res, 200, { ok: true });
     }
 
-    // --- spustenie kontroly ---
+    // --- run a check ---
     if (url.pathname === "/check") {
       const shop = requireShop();
       if (!shop) return;
       const s = db.prepare("SELECT * FROM shops WHERE shop_domain=?").get(shop);
       if (!s) return send(res, 404, { error: "shop not found" });
       if (q.force === "1") invalidate(s.id);
-      // Ked appka stratila pristup, vysledok v cache uz NIE JE aktualny stav
-      // obchodu — je to posledna snimka spred poruchy. Servirovat ju bez
-      // oznacenia znamena tvrdit "takto to u teba vyzera teraz", co appka
-      // v tej chvili nevie. Priznak si nesie kazda odpoved z cache.
+      // When the app has lost access, the cached result is NOT the current
+      // state of the store; it is the last snapshot before the failure.
+      // Serving it unmarked would claim "this is how things look now", which
+      // the app does not know at that moment. Every cached response carries the flag.
       const stamp = (payload) => (s.access_broken_kind
         ? { ...payload, access_lost: { kind: s.access_broken_kind,
                                        since: s.access_broken_since } }
         : payload);
       const cached = getCached(s.id);
       if (cached) return send(res, 200, stamp({ ...cached, cached: true }));
-      // Stale-while-revalidate: posledny vysledok ide merchantovi HNED,
-      // cerstvy sa dopocita na pozadi a UI si zan pride znova. Plny check
-      // (60 dni Shopify + GA4) sa caka len pri uplne prvom behu a pri
-      // explicitnom Refresh (force=1 zmaze aj stale zaznam).
+      // Stale-while-revalidate: the last result goes to the merchant
+      // IMMEDIATELY, a fresh one is computed in the background and the UI
+      // fetches it again. A full check (60 days of Shopify + GA4) is awaited
+      // only on the very first run and on explicit Refresh (force=1 also
+      // drops the stale record).
       const stale = getStale(s.id);
       if (stale) {
         refreshInBackground(s);
         return send(res, 200,
           stamp({ ...stale, cached: true, refreshing: true }));
       }
-      // ziadny vysledok v cache — ak uz check bezi (Refresh pocas bg behu),
-      // pockame nan namiesto druheho paralelneho behu
+      // no cached result: if a check is already running (Refresh during a
+      // background run), wait for it instead of starting a second one
       if (checksInFlight.has(s.id)) {
         await checksInFlight.get(s.id);
         const fresh = getCached(s.id);
@@ -882,7 +885,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, result);
     }
 
-    // --- Meta OAuth: zaciatok prihlasenia ---
+    // --- Meta OAuth: start login ---
     if (url.pathname === "/meta/connect") {
       const shop = requireShop();
       if (!shop) return;
@@ -899,7 +902,7 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
-    // --- Meta OAuth: navrat ---
+    // --- Meta OAuth: callback ---
     if (url.pathname === "/meta/callback") {
       const st = states.get(q.state);
       if (!st) return send(res, 401, { error: "bad state" });
@@ -913,21 +916,21 @@ const server = http.createServer(async (req, res) => {
       const redirect = `${config.app_url}/meta/callback`;
       try {
         const short = await metaExchange(q.code, redirect);
-        // kratkodoby token plati ~1-2 h -> hned vymenit za 60-dnovy
+        // a short-lived token lasts ~1-2 h -> exchange it for a 60-day one right away
         const long = await longLivedToken(short.access_token);
         const info = await inspectToken(long.access_token);
         const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?")
           .get(st.shop);
-        // fb_user_id treba, aby deauthorize vedel odpojit spravny obchod
+        // fb_user_id is needed so deauthorize can disconnect the right store
         let fbUserId = null;
         try {
           const me = await fetch(
             "https://graph.facebook.com/v21.0/me?fields=id&access_token="
             + encodeURIComponent(long.access_token)).then((x) => x.json());
           fbUserId = me?.id || null;
-        } catch { /* nie je kriticke */ }
+        } catch { /* not critical */ }
         saveOAuthToken(s.id, long.access_token, long.expires_in, info.scopes, fbUserId);
-        // ten isty token pouzijeme aj pre citanie/zapis v meta.mjs
+        // the same token is used for reading/writing in meta.mjs
         saveMetaConfig(s.id, { token: long.access_token });
       } catch (e) {
         console.error("meta oauth:", e.message);
@@ -942,21 +945,21 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
-    // --- Meta: odobratie pristupu (Deauthorize callback) ---
-    // Meta sem posle signed_request, ked pouzivatel odoberie appke pristup.
+    // --- Meta: access removal (Deauthorize callback) ---
+    // Meta sends a signed_request here when a user removes the app's access.
     if (url.pathname === "/meta/deauthorize" && req.method === "POST") {
       const body = await rawBody(req);
       const sr = new URLSearchParams(body).get("signed_request");
       const parsed = parseSignedRequest(sr);
       if (!parsed) return send(res, 400, { error: "bad signed_request" });
-      // LEN obchody, ktore pripojil prave tento Facebook pouzivatel.
-      // Predtym sa mazali tokeny vsetkych merchantov (audit, bod 2).
+      // ONLY stores connected by this particular Facebook user.
+      // Previously the tokens of all merchants were deleted.
       const r = disconnectByFbUser(parsed.user_id);
       console.log("meta deauthorize:", JSON.stringify(r));
       return send(res, 200, { ok: true });
     }
 
-    // --- Meta: ziadost o zmazanie dat (povinne pre App Review) ---
+    // --- Meta: data deletion request (required for App Review) ---
     if (url.pathname === "/meta/data-deletion") {
       if (req.method === "POST") {
         const body = await rawBody(req);
@@ -971,8 +974,8 @@ const server = http.createServer(async (req, res) => {
         db.prepare(`INSERT INTO deletion_requests (code, fb_user_id, status)
                     VALUES (?,?,?)`).run(code, parsed.user_id || null, "done");
 
-        // Nemame ziadne osobne udaje od Meta — len ad account tokeny.
-        // Mazeme LEN to, co patri tomuto FB pouzivatelovi (audit, bod 2).
+        // We hold no personal data from Meta, only ad account tokens.
+        // Delete ONLY what belongs to this FB user.
         const del = disconnectByFbUser(parsed.user_id);
         console.log("meta data deletion:", JSON.stringify(del));
         return send(res, 200, {
@@ -980,16 +983,16 @@ const server = http.createServer(async (req, res) => {
           confirmation_code: code,
         });
       }
-      // GET — stranka so stavom, na ktoru Meta odkazuje pouzivatela
+      // GET: status page Meta links the user to
       const code = q.code || "";
       let status = "unknown";
       try {
         const r = db.prepare(
           "SELECT status, created_at FROM deletion_requests WHERE code=?").get(code);
         if (r) status = r.status;
-      } catch { /* tabulka este nemusi existovat */ }
+      } catch { /* table may not exist yet */ }
       const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-        <title>TrackGap — data deletion</title>
+        <title>TrackGap - data deletion</title>
         <style>body{font:15px/1.6 -apple-system,sans-serif;max-width:620px;
         margin:60px auto;padding:0 20px;color:#1a1c1d}
         code{background:#f0f1f3;padding:2px 6px;border-radius:4px}</style></head>
@@ -1005,7 +1008,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, html, "text/html");
     }
 
-    // --- Meta: list ad accounts a token overit ---
+    // --- Meta: list ad accounts and verify the token ---
     if (url.pathname === "/meta/accounts" && req.method === "POST") {
       const shop = requireShop();
       if (!shop) return;
@@ -1019,7 +1022,7 @@ const server = http.createServer(async (req, res) => {
         try {
           accounts = await listAdAccounts(p.token);
         } catch (e) {
-          // token z Events Managera nema ads_read — pixel cast aj tak funguje
+          // an Events Manager token lacks ads_read; the pixel part works anyway
           accountsError = e.message;
         }
         const pixels = await listPixels(p.token, accounts.map((a) => a.id));
@@ -1035,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // --- Meta: ulozit konfiguraciu ---
+    // --- Meta: save configuration ---
     if (url.pathname === "/meta/setup" && req.method === "POST") {
       const shop = requireShop();
       if (!shop) return;
@@ -1049,7 +1052,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
-    // --- Meta: denne porovnanie ---
+    // --- Meta: daily comparison ---
     if (url.pathname === "/meta/compare") {
       const shop = requireShop();
       if (!shop) return;
@@ -1089,7 +1092,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // --- billing: plany a stav ---
+    // --- billing: plans and status ---
     if (url.pathname === "/billing/plans") {
       const shop = requireShop();
       if (!shop) return;
@@ -1098,7 +1101,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         plans: Object.values(PLANS).map((p) => ({
           ...p,
-          // Cena za oba cykly naraz — UI prepina lokalne, bez dalsieho requestu.
+          // Prices for both cycles at once; the UI switches locally without another request.
           annual_price: cyclePrice(p.id, "annual"),
           annual_saving: p.price * 2,
         })),
@@ -1110,27 +1113,27 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // --- billing: zacatie predplatneho ---
+    // --- billing: start a subscription ---
     if (url.pathname === "/billing/subscribe") {
       const shop = requireShop();
       if (!shop) return;
       const token = await validToken(shop, sessionToken);
-      // Sem sa chodi TOP-LEVEL navigaciou z ui.html, nie fetchom. Surovy JSON
-      // by merchantovi ostal na bielej stranke — presne to videl reviewer
-      // 10.9.2026. Posleme ho radsej na reautorizaciu.
+      // This is reached by TOP-LEVEL navigation from ui.html, not by fetch. Raw
+      // JSON would leave the merchant on a blank page, so send them to
+      // reauthorization instead.
       if (!token) {
         res.writeHead(302, { Location: `/auth?shop=${encodeURIComponent(shop)}` });
         return res.end();
       }
       try {
-        // Test charge na development store. Bez toho by Shopify od reviewera
-        // pytal realne peniaze a ten by predplatne nedokoncil.
+        // Test charge on a development store. Without it Shopify would ask
+        // the reviewer for real money and the subscription would not complete.
         const isTest = process.env.TRACKGAP_BILLING_TEST === "1"
                     || await isDevelopmentStore(shop, token);
-        // Neznamy cyklus z URL nesmie zhodit request na 400 — fallback na
-        // mesacny je bezpecnejsi nez odmietnut platbu.
+        // An unknown cycle in the URL must not fail the request with 400; falling
+        // back to monthly is safer than refusing the payment.
         const cycle = BILLING_CYCLES[q.cycle] ? q.cycle : "monthly";
-        // vzdy overena domena z tokenu — q.shop by mohol byt iny obchod
+        // always the domain verified from the token; q.shop could be another store
         const r = await createSubscription(shop, token, q.plan, isTest, cycle);
         if (r.free) {
           res.writeHead(302, { Location: adminAppUrl(shop) });
@@ -1143,7 +1146,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // --- billing: navrat po potvrdeni v Shopify admine ---
+    // --- billing: return after confirmation in the Shopify admin ---
     if (url.pathname === "/billing/callback") {
       if (!validShop(q.shop)) return send(res, 400, { error: "invalid shop" });
       const expectedPlan = PLANS[q.plan] ? q.plan : null;
@@ -1152,8 +1155,8 @@ const server = http.createServer(async (req, res) => {
           || !verifyBillingState(q.state, q.shop, expectedPlan, expectedCycle)) {
         return send(res, 400, { error: "invalid or expired billing state" });
       }
-      // Sem presmerovava Shopify, session token teda nemame — spoliehame sa na
-      // ulozeny access token. Ak chyba (obchod odinstalovany), nesmie to byt 500.
+      // Shopify redirects here, so there is no session token; we rely on the
+      // stored access token. If it is missing (store uninstalled), this must not be a 500.
       const token = await validToken(q.shop);
       if (!token) {
         res.writeHead(302, { Location: `/auth?shop=${encodeURIComponent(q.shop)}` });
@@ -1178,22 +1181,22 @@ const server = http.createServer(async (req, res) => {
       return res.end();
     }
 
-    // --- nastavenie doplnania konverzii (Measurement Protocol) ---
+    // --- conversion backfill setup (Measurement Protocol) ---
     if (url.pathname === "/backfill/setup" && req.method === "POST") {
       const shop = requireShop();
       if (!shop) return;
       const body = await rawBody(req);
       let p;
       try { p = JSON.parse(body); } catch { return send(res, 400, { error: "bad json" }); }
-      p.shop = shop;              // telo sa na autorizaciu NEPOUZIVA
+      p.shop = shop;              // the body is NOT used for authorization
       if (!/^G-[A-Z0-9]+$/i.test(p.measurement_id || "")) {
         return send(res, 400, { error: "measurement_id must look like G-XXXXXXX" });
       }
       if (!p.api_secret || p.api_secret.length < 10) {
         return send(res, 400, { error: "api_secret is required" });
       }
-      // pixel musi poznat Measurement ID, aby vedel precitat spravnu
-      // _ga_<ID> cookie pre session_id
+      // the pixel needs the Measurement ID to read the correct
+      // _ga_<ID> cookie for session_id
       const tok = await validToken(p.shop, sessionToken);
       if (!tok) return send(res, 401, { error: "shop is not installed" });
       const pixel = await ensureWebPixel(
@@ -1211,7 +1214,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
-    // --- prehlad doplnania ---
+    // --- backfill overview ---
     if (url.pathname === "/backfill/stats") {
       const shop = requireShop();
       if (!shop) return;
@@ -1224,15 +1227,15 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { stats, recent });
     }
 
-    // --- denny rozpad pre graf ---
+    // --- daily breakdown for the chart ---
     if (url.pathname === "/daily") {
       const shop = requireShop();
       if (!shop) return;
       const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shop);
       if (!s) return send(res, 404, { error: "shop not found" });
       const days = Math.min(parseInt(q.days || "30", 10), 90);
-      // Cakacie okno je vypnute (MIN_AGE_HOURS=0), takze graf ukazuje
-      // chybajuce objednavky hned — rovnako ako porovnavaci engine.
+      // The waiting window is disabled (MIN_AGE_HOURS=0), so the chart shows
+      // missing orders immediately, same as the reconciliation engine.
       const rows = db.prepare(`
         SELECT substr(o.created_at,1,10) AS d,
                COUNT(*) AS orders,
@@ -1250,10 +1253,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, rows);
     }
 
-    // --- Google Ads cez GA4 ---
-    // Ziadny developer token: citame spend a kampane z merchantovej GA4
-    // property, ktoru uz pripojil. Vysledok sa cachuje na hodinu — GA4 ma
-    // tokenovu kvotu na property a tu mina merchant, nie my.
+    // --- Google Ads via GA4 ---
+    // No developer token: spend and campaigns are read from the merchant's
+    // already connected GA4 property. The result is cached for an hour; GA4
+    // has a per-property token quota, which the merchant spends, not us.
     if (url.pathname === "/ads") {
       const shop = requireShop();
       if (!shop) return;
@@ -1279,8 +1282,8 @@ const server = http.createServer(async (req, res) => {
       const { rows, quota } = await fetchAdsCampaigns(
         gtok, s.ga4_property_id, `${days}daysAgo`, "yesterday");
 
-      // Objednavky za to iste obdobie su poistka proti falosnemu poplachu:
-      // ked obchod nic nepredal, nulove konverzie su spravny udaj.
+      // Orders for the same period guard against a false alarm: if the store
+      // sold nothing, zero conversions is correct data.
       const since = new Date(Date.now() - days * 86400_000).toISOString();
       const orders = db.prepare(
         `SELECT COUNT(*) n FROM orders
@@ -1303,7 +1306,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, result);
     }
 
-    // --- historia behov ---
+    // --- run history ---
     if (url.pathname === "/history") {
       const shop = requireShop();
       if (!shop) return;
@@ -1312,7 +1315,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, history(s.id));
     }
 
-    // --- nastavenie alertov ---
+    // --- alert setup ---
     if (url.pathname === "/alerts/setup" && req.method === "POST") {
       const shop = requireShop();
       if (!shop) return;
@@ -1321,17 +1324,17 @@ const server = http.createServer(async (req, res) => {
       try { p = JSON.parse(body); } catch { return send(res, 400, { error: "bad json" }); }
       p.shop = shop;
 
-      // ADRESU OVERUJEME V DNS, nie len regexom.
+      // THE ADDRESS IS VERIFIED VIA DNS, not just with a regex.
       //
-      // Regex prepusti `app-review@example.com` — a presne to sa 1.9.2026
-      // stalo: adresa sa ulozila, onboarding dostal zelenu fajku, UI napisalo
-      // "check your inbox" a o hodinu a pol prisiel NAM bounce
-      // "Domain example.com does not accept mail (nullMX)".
+      // A regex lets `app-review@example.com` through, which is exactly what
+      // happened: the address was saved, onboarding got a green check mark,
+      // the UI said "check your inbox", and an hour and a half later a bounce
+      // came back to US: "Domain example.com does not accept mail (nullMX)".
       //
-      // Appka teda tvrdila, ze alerty su nastavene, hoci sa na tu adresu nikdy
-      // nic nedoruci. To je ta ista tichá slepota, ktoru u merchanta hlasime —
-      // len o poschodie vyssie a o to horsia, ze sa tyka jedineho kanala,
-      // ktorym vieme dat vediet o comkolvek.
+      // The app thus claimed alerts were set up although nothing would ever
+      // be delivered to that address. That is the same silent blindness we
+      // report for merchants, one level up, and worse because it affects the
+      // only channel we have to tell them anything.
       if (p.email) {
         const chk = await checkMailDomain(p.email);
         if (!chk.ok) {
@@ -1352,10 +1355,10 @@ const server = http.createServer(async (req, res) => {
       if (p.test && p.email) {
         try {
           await sendTest(p.shop, p.email);
-          // Prevzatie Bridgeom NIE JE dorucenie — status ostava 'unverified'
-          // az kym mail naozaj nedojde. Tvrdit merchantovi "hotovo" v moment,
-          // ked spravu prevzal nas vlastny relay, je presne ta domienka,
-          // ktora nas dostala.
+          // Acceptance by Bridge is NOT delivery: the status stays 'unverified'
+          // until a mail actually arrives. Telling the merchant "done" the moment
+          // our own relay accepted the message would be an unverified
+          // assumption.
         } catch (e) {
           db.prepare(`UPDATE shops SET alert_email_status='failed',
                         alert_email_error=? WHERE shop_domain=?`)
@@ -1366,10 +1369,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
-    // --- staticke subory (logo, screenshoty) ---
+    // --- static files (logo, screenshots) ---
     if (url.pathname.startsWith("/assets/")) {
       const name = url.pathname.replace("/assets/", "");
-      // ziadne ../ — cesta musi ostat v assets adresari
+      // no ../ : the path must stay inside the assets directory
       if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
         return send(res, 400, { error: "bad name" });
       }
@@ -1386,7 +1389,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(fs.readFileSync(p));
     }
 
-    // --- privacy policy a terms (povinne pre App Store aj Google OAuth) ---
+    // --- privacy policy and terms (required for App Store and Google OAuth) ---
     if (url.pathname === "/privacy" || url.pathname === "/terms") {
       const f = url.pathname === "/terms" ? "./terms.html" : "./privacy.html";
       const html = fs.readFileSync(new URL(f, import.meta.url), "utf8");
@@ -1409,8 +1412,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, xml, "application/xml");
     }
 
-    // Verejny A/B nahlad novej landing page. Povodna homepage na `/`
-    // zostava nedotknuta, kym sa vedome nerozhodne o jej nahradeni.
+    // Public A/B preview of the new landing page. The original homepage on `/`
+    // stays untouched until a deliberate decision to replace it.
     if (url.pathname === "/v2" || url.pathname === "/v2/") {
       const html = fs.readFileSync(
         new URL("./landing-v2.html", import.meta.url), "utf8",
@@ -1423,17 +1426,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- UI ---
-    // Shopify pri nacitani embedded appky vzdy pripaja ?shop=. Bez neho ide
-    // o beznu navstevu z internetu -> verejna stranka o produkte.
+    // Shopify always appends ?shop= when loading the embedded app. Without it
+    // this is an ordinary visit from the internet -> public product page.
     if (url.pathname === "/app" || url.pathname === "/") {
       const isEmbedded = !!q.shop || !!q.host || url.pathname === "/app";
       const file = isEmbedded ? "./ui.html" : "./landing.html";
       let html = fs.readFileSync(new URL(file, import.meta.url), "utf8");
 
-      // App Bridge sa BEZ data-api-key vobec neinicializuje: window.shopify
-      // neexistuje, session token sa neda ziskat a druhe volanie skonci na 401
-      // (App Store req. 1.1.1). Klucom je client_id, doplna sa az tu, aby
-      // nebolo natvrdo v HTML.
+      // Without data-api-key App Bridge does not initialise at all:
+      // window.shopify does not exist, no session token can be obtained and
+      // the second call ends in 401 (App Store req. 1.1.1). The key is the
+      // client_id, injected here so it is not hard-coded in the HTML.
       if (isEmbedded) {
         html = html.replace(
           '<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js">',
@@ -1442,8 +1445,8 @@ const server = http.createServer(async (req, res) => {
         );
       }
 
-      // Embedded appka sa MUSI dat vlozit do Shopify adminu a nikam inam.
-      // Bez tejto hlavicky App Store review neprejde.
+      // The embedded app MUST be embeddable in the Shopify admin and nowhere
+      // else. App Store review does not pass without this header.
       const headers = { "Content-Type": "text/html; charset=utf-8" };
       if (isEmbedded) {
         const s = validShop(q.shop) ? q.shop : "*.myshopify.com";
@@ -1461,14 +1464,14 @@ const server = http.createServer(async (req, res) => {
     if (e instanceof PayloadTooLargeError) {
       return send(res, 413, { error: "payload too large" });
     }
-    // Strata pristupu nie je nasa chyba a merchant s nou VIE nieco spravit.
-    // Ako 500 "internal error" to vyzeralo ako porucha appky, takze jedina
-    // rozumna reakcia bola cakat — a cakanim sa to nikdy nespravi.
+    // Lost access is not our bug, and the merchant CAN do something about it.
+    // As a 500 "internal error" it looked like an app failure, so the only
+    // sensible reaction was to wait, and waiting never fixes it.
     if (e instanceof SetupError) {
-      // 428 Precondition Required: poziadavka je v poriadku, len sa najprv
-      // musi dokoncit krok nastavenia. Zamerne nie 500 (vyzera ako nasa
-      // porucha, na ktoru sa da len cakat) a nie 409 access_lost (tvrdilo by,
-      // ze sa nieco pokazilo — pritom sa este nic nezacalo).
+      // 428 Precondition Required: the request is fine, a setup step just has
+      // to be completed first. Deliberately not 500 (looks like our failure,
+      // where all you can do is wait) and not 409 access_lost (would claim
+      // something broke, when nothing has started yet).
       return send(res, 428, {
         error: "setup_required",
         step: e.step,
@@ -1487,17 +1490,18 @@ const server = http.createServer(async (req, res) => {
       });
     }
     console.error(`[${new Date().toISOString()}]`, e.stack || e.message);
-    // Klientovi ide vseobecna hlaska — interne detaily (GraphQL chyby, cesty,
-    // nazvy tabuliek) patria do logu, nie do odpovede (audit, bod 11).
+    // The client gets a generic message; internal details (GraphQL errors,
+    // paths, table names) belong in the log, not in the response.
     send(res, 500, { error: "internal error" });
   }
 });
 
 /**
- * Spracovanie webhooku orders/create.
+ * Handles the orders/create webhook.
  *
- * Bezi na pozadi, lebo Shopify ma 5 s timeout. Cielom je doplnit konverziu
- * do 24 h od startu session — po tom sa uz nesparuje s povodnou navstevou.
+ * Runs in the background because Shopify has a 5 s timeout. The goal is to
+ * backfill the conversion within 24 h of the session start; after that it
+ * no longer matches the original visit.
  */
 async function handleOrderWebhook(shopDomain, order) {
   const shop = db.prepare("SELECT * FROM shops WHERE shop_domain=?").get(shopDomain);
@@ -1532,9 +1536,9 @@ async function handleOrderWebhook(shopDomain, order) {
             @landing_site,@referring_site,@utm_source,@utm_medium,@utm_campaign)`)
     .run({ ...row, shop_id: shop.id });
 
-  // Spoj dokaz od pixelu s objednavkou. `checkout_completed` casto nema
-  // order_id — az tu sa token a cislo objednavky prvykrat stretnu. Bez toho
-  // by pixel_events zostali nesparovatelne a tretia vrstva by bola k nicomu.
+  // Link the pixel proof to the order. `checkout_completed` often has no
+  // order_id; this is where the token and the order number first meet.
+  // Without it pixel_events could not be matched and the third layer would be useless.
   if (order.checkout_token) {
     try {
       linkOrderToPixel(shop.id, order.checkout_token, orderId);
@@ -1543,13 +1547,13 @@ async function handleOrderWebhook(shopDomain, order) {
     }
   }
 
-  // Cache kontroly tu NEinvalidovat: cerstva objednavka je pre reconcile
-  // "too recent to compare", takze vysledok nezmeni — a kazda invalidacia
-  // znamena, ze dalsie otvorenie dashboardu bezi plny 60-dnovy check
-  // (Shopify + GA4 API). Pri aktivnom obchode by cache nikdy nezila.
-  // Cerstvost riesi 60-min TTL a tlacidlo Refresh (?force=1).
+  // Do NOT invalidate the check cache here: a fresh order is "too recent to
+  // compare" for reconcile, so the result would not change, and every
+  // invalidation means the next dashboard open runs a full 60-day check
+  // (Shopify + GA4 API). On an active store the cache would never survive.
+  // Freshness is handled by the 60-min TTL and the Refresh button (?force=1).
 
-  // backfill len ak si to merchant zapol a mame kam posielat
+  // backfill only if the merchant enabled it and we have somewhere to send to
   if (!shop.mp_measurement_id || !shop.mp_api_secret_enc) return;
 
   const identity = identityForOrder(
@@ -1557,7 +1561,7 @@ async function handleOrderWebhook(shopDomain, order) {
 
   if (!identity) {
     recordBackfill(shop.id, orderId, "skipped", "no_identity", {
-      note: "No GA4 client ID — the pixel did not capture an identity and none "
+      note: "No GA4 client ID - the pixel did not capture an identity and none "
           + "arrived in the order note attributes.",
     });
     return;
@@ -1569,18 +1573,18 @@ async function handleOrderWebhook(shopDomain, order) {
     return;
   }
 
-  // Uz sme tuto objednavku raz poslali?
+  // Have we already sent this order once?
   //
-  // POZOR: samotny SELECT nestaci. orders/create a orders/updated chodia casto
-  // v tej istej sekunde, obidva prejdu kontrolou skor, nez ktorykolvek stihne
-  // zapisat — a konverzia odide DVAKRAT (overene naostro 31.8.2026, #11333).
-  // Preto si najprv atomicky rezervujeme miesto: unikatny index na
-  // (shop_id, order_id) prepusti len prveho, druhy dostane vynimku a skonci.
+  // NOTE: a SELECT alone is not enough. orders/create and orders/updated often
+  // arrive in the same second; both pass the check before either one writes,
+  // and the conversion is sent TWICE (reproduced in production). So we first
+  // reserve the slot atomically: a unique index on (shop_id, order_id) lets
+  // only the first through, the second gets an exception and stops.
   try {
     db.prepare(`INSERT INTO backfill_locks (shop_id, order_id) VALUES (?,?)`)
       .run(shop.id, orderId);
   } catch {
-    return;                       // uz to spracovava iny webhook
+    return;                       // another webhook is already handling it
   }
 
   const alreadySent = db.prepare(
@@ -1588,7 +1592,7 @@ async function handleOrderWebhook(shopDomain, order) {
   ).get(shop.id, orderId);
   if (alreadySent) return;
 
-  // ak uz transakcia v GA4 je, neposielame — vznikla by duplicita
+  // if the transaction is already in GA4, do not send; it would create a duplicate
   const exists = db.prepare(
     "SELECT 1 FROM ga4_events WHERE shop_id=? AND transaction_id=?",
   ).get(shop.id, orderId);
@@ -1602,26 +1606,26 @@ async function handleOrderWebhook(shopDomain, order) {
   recordBackfill(shop.id, orderId, r.sent ? "sent" : "failed",
                  r.reason || null, r);
 
-  // Meta CAPI — ak si merchant pripojil pixel. Bezi nezavisle od GA4:
-  // event_id = cislo objednavky, takze Meta deduplikuje voci vlastnemu pixelu.
-  // Predtym bolo sendCapiPurchase importovane, ale nikdy sa nevolalo.
+  // Meta CAPI, if the merchant connected a pixel. Runs independently of GA4:
+  // event_id = order number, so Meta deduplicates against its own pixel.
+  // Previously sendCapiPurchase was imported but never called.
   try {
     const mcfg = metaConfig(shop.id);
     if (mcfg?.capi_enabled && mcfg.pixel_id && mcfg.token) {
       const mr = await sendCapiPurchase(mcfg, row, identity);
       console.log(`meta capi ${orderId}:`,
-                  mr.sent ? "odoslane" : `preskocene (${mr.reason})`);
+                  mr.sent ? "sent" : `skipped (${mr.reason})`);
     }
   } catch (e) {
-    // zlyhanie Meta nesmie zhodit GA4 vetvu
+    // a Meta failure must not break the GA4 branch
     console.error("meta capi:", e.message);
   }
 }
 
 /**
- * Overi a rozbali signed_request od Meta (deauthorize, data deletion).
- * Podpis je HMAC-SHA256 s app secret — bez overenia by ktokolvek mohol
- * poslat poziadavku na zmazanie cudzich dat.
+ * Verifies and decodes a signed_request from Meta (deauthorize, data deletion).
+ * The signature is HMAC-SHA256 with the app secret; without verification
+ * anyone could request deletion of someone else's data.
  */
 function parseSignedRequest(sr) {
   if (!sr || !sr.includes(".")) return null;
@@ -1644,38 +1648,38 @@ function parseSignedRequest(sr) {
 }
 
 /**
- * Platny access token pre obchod. Ked je pred expiraciou, obnovi ho.
+ * A valid access token for the store, refreshed when close to expiry.
  *
- * Shopify uz nevydava trvale tokeny. Bez tohto by appka po niekolkych hodinach
- * ticho prestala fungovat — vsetky volania Admin API by zacali padat na 401
- * a merchant by videl len prazdny dashboard (31.8.2026).
+ * Shopify no longer issues permanent tokens. Without this the app would
+ * silently stop working after a few hours: every Admin API call would start
+ * failing with 401 and the merchant would only see an empty dashboard.
  */
 async function validToken(shopDomain, idToken = null) {
   const info = shopTokenInfo(shopDomain);
-  // Ziadny ulozeny token. Pri managed installation je to NORMALNY stav hned
-  // po instalacii, nie chyba — Shopify nas OAuth nikdy nezavolal, takze si
-  // token vypytame sami zo session tokenu tejto poziadavky.
+  // No stored token. Under managed installation this is the NORMAL state
+  // right after install, not an error: Shopify never called our OAuth, so we
+  // request the token ourselves using this request's session token.
   if (!info) return mintToken(shopDomain, idToken);
   if (!info.needs_refresh || !info.refresh) return info.token;
   try {
     const t = await refreshAccessToken(shopDomain, info.refresh);
     upsertShop(shopDomain, t.access_token, t.refresh_token || info.refresh,
                t.expires_in || null);
-    console.log(`token obnoveny: ${shopDomain}`);
+    console.log(`token refreshed: ${shopDomain}`);
     return t.access_token;
   } catch (e) {
     console.error(`token refresh (${shopDomain}):`, e.message);
-    // Refresh token uz neplati (napr. po reinstalle). Ak sme v poziadavke z
-    // admina, token exchange nas vytiahne bez toho, aby merchant cokolvek
-    // klikal. Az ked ani to nejde, skusime este stary token.
+    // The refresh token is no longer valid (e.g. after a reinstall). If this
+    // request comes from the admin, token exchange recovers without the
+    // merchant clicking anything. Only if that fails too do we try the old token.
     return (await mintToken(shopDomain, idToken)) || info.token;
   }
 }
 
 /**
- * Je to development store? Rozhoduje o tom, ci ma byt charge testovaci.
- * Pri chybe radsej vratime false — radsej realny charge nez tichy test charge
- * u platiaceho merchanta, za ktory by sme nikdy nedostali zaplatene.
+ * Is this a development store? Decides whether the charge should be a test.
+ * On error return false: a real charge is better than a silent test charge
+ * for a paying merchant that would never actually be paid.
  */
 async function isDevelopmentStore(shop, token) {
   try {
@@ -1687,7 +1691,7 @@ async function isDevelopmentStore(shop, token) {
   }
 }
 
-/** Session token -> offline access token. Vrati null, ak sa to nepodari. */
+/** Session token -> offline access token. Returns null on failure. */
 async function mintToken(shopDomain, idToken) {
   if (!idToken) return null;
   try {
@@ -1705,9 +1709,9 @@ async function mintToken(shopDomain, idToken) {
 export async function runCheck(shop) {
   const token = await validToken(shop.shop_domain);
   if (!token) {
-    // Appka stratila pristup do obchodu. Zapisat to je dolezitejsie nez
-    // samotna vynimka: bez zaznamu porucha zostane len v logu, ktory nikto
-    // necita, a merchant sa nedozvie, ze uz nie je strazeny.
+    // The app lost access to the store. Recording it matters more than the
+    // exception itself: without a record the failure stays only in a log
+    // nobody reads, and the merchant never learns they are no longer watched.
     markAccessBroken(shop.id, "shopify_auth",
       "Shopify access token is gone or could not be refreshed");
     throw new AccessError("shopify_auth", "shop not authenticated");
@@ -1717,12 +1721,13 @@ export async function runCheck(shop) {
       "Select which Google Analytics property belongs to this store.");
   }
   if (!shop.google_refresh_enc) {
-    // Rozlisenie, ktore rozhoduje o tom, ci ide o poruchu alebo o onboarding.
+    // The distinction that decides between a failure and onboarding.
     //
-    // Bez `ga4_connected_at` sa nedalo odlisit "ucet nikdy nebol pripojeny"
-    // od "spojenie sa stratilo" — appka preto cerstvo nainstalovanemu obchodu
-    // hlasila stratu pristupu k niecomu, co nikdy nemala, zapisala si to ako
-    // vlastnu poruchu a po 6 h z toho dozrel e-mail "prestali sme strazit".
+    // Without `ga4_connected_at` it was impossible to tell "the account was
+    // never connected" from "the connection was lost"; the app therefore told
+    // a freshly installed store it had lost access to something it never had,
+    // recorded it as its own failure, and after 6 h that turned into a
+    // "we stopped watching" e-mail.
     if (!shop.ga4_connected_at) {
       throw new SetupError("ga4_connect",
         "Connect your Google account so TrackGap can compare orders with GA4.");
@@ -1735,10 +1740,10 @@ export async function runCheck(shop) {
   const since = new Date(Date.now() - 60 * 86400_000).toISOString().slice(0, 10);
   const orders = await fetchOrders(shop.shop_domain, token, since);
 
-  // Google refresh token moze prestat platit bez toho, aby nam to niekto
-  // oznamil: merchant odvola pristup, zmeni heslo, alebo (nas pripad)
-  // OAuth klient je v "Testing" mode a token plati 7 dni. Vysledok je vzdy
-  // rovnaky — appka prestane vidiet do GA4 a bez tohto zapisu o tom mlci.
+  // A Google refresh token can stop working without anyone telling us: the
+  // merchant revokes access, changes their password, or the OAuth client is
+  // in "Testing" mode where tokens last 7 days. The result is always the
+  // same: the app can no longer see GA4 and, without this record, stays silent.
   let gtok;
   try {
     gtok = await accessToken(decrypt(shop.google_refresh_enc));
@@ -1749,10 +1754,10 @@ export async function runCheck(shop) {
   const { rows: ga4rows, quota } = await fetchTransactions(
     gtok, shop.ga4_property_id, "60daysAgo", "yesterday");
 
-  // Dosiahli sme obe strany porovnania -> pristup je v poriadku.
+  // We reached both sides of the comparison -> access is fine.
   clearAccessBroken(shop.id);
 
-  // uloz
+  // store
   const ins = db.prepare(`INSERT OR REPLACE INTO orders
     (shop_id,order_id,order_number,total,subtotal,shipping,tax,discounts,
      cancelled,financial_status,currency,created_at,landing_site,
@@ -1769,13 +1774,13 @@ export async function runCheck(shop) {
   db.transaction((rows) => rows.forEach((r) =>
     insG.run({ ...r, shop_id: shop.id })))(ga4rows);
 
-  // identita z pixelu — potrebna na rozdelenie chybajucich podla priciny
+  // identity from the pixel: needed to split missing orders by cause
   const identityFor = (orderId) =>
     identityForOrder(shop.id, String(orderId), null, null);
 
-  // Tretia vrstva: co realne odislo z prehliadaca. Vdaka nej vie engine
-  // odlisit "GA4 to nedostalo" od "nikdy to neodislo" — dve poruchy s uplne
-  // inou opravou.
+  // Third layer: what actually left the browser. It lets the engine tell
+  // "GA4 did not receive it" from "it never left", two failures with
+  // entirely different fixes.
   const pixelSince = pixelActiveSince(shop.id);
   const pixel = {
     active: !!pixelSince,
@@ -1795,12 +1800,12 @@ export async function runCheck(shop) {
   db.prepare("UPDATE shops SET last_sync_at=datetime('now') WHERE id=?")
     .run(shop.id);
 
-  // monitoring: zapis behu, porovnaj s historiou, vytvor alerty
+  // monitoring: record the run, compare with history, create alerts
   recordRun(shop.id, result);
   const alerts = detectRegressions(shop.id, result);
   if (alerts.length) {
     saveAlerts(shop.id, alerts);
-    // mail nesmie zhodit kontrolu — chyby len logujeme
+    // a mail must not break the check; errors are only logged
     flushAlerts().catch((e) => console.error("flushAlerts:", e.message));
   }
 
@@ -1811,7 +1816,7 @@ export async function runCheck(shop) {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`TRACKGAP_READY port=${PORT}`);
-  // Pravidelne kontroly + alerty. Bez toho by sa kontrola spustila len pri
-  // otvoreni dashboardu a alerty by nikdy neprisli samy (audit, bod 4).
+  // Periodic checks + alerts. Without this a check would only run when the
+  // dashboard is opened and alerts would never arrive on their own.
   startScheduler(runCheck);
 });

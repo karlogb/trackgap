@@ -1,18 +1,17 @@
 /**
- * TrackGap — Shopify Billing.
+ * TrackGap - Shopify Billing.
  *
- * Shopify ZAKAZUJE vlastnu platobnu branu pre App Store appky — vsetko musi
- * ist cez ich Billing API. Preto tu nie je Stripe ani Paddle.
+ * Shopify PROHIBITS custom payment gateways for App Store apps; everything
+ * must go through their Billing API. That is why there is no Stripe or Paddle.
  *
- * Model: recurring subscription s trial. Ceny su nizsie nez Untracked
- * ($29/$79/$199) zamerne — vstupujeme neskor a potrebujeme prve recenzie.
+ * Model: recurring subscription with a trial.
  *
- * Limity su na POCET OBJEDNAVOK za mesiac, nie na trzby obchodu: objednavky
- * su aj nas skutocny naklad (Shopify API volania + GA4 kvota).
+ * Limits are on the NUMBER OF ORDERS per month, not on store revenue: orders
+ * are also our actual cost (Shopify API calls + GA4 quota).
  *
- * Fakturacny cyklus: mesacny (EVERY_30_DAYS) alebo rocny (ANNUAL) s dvoma
- * mesiacmi zadarmo. Rocny plati merchant dopredu — kym appka nema recenzie,
- * je to jediny sposob, ako znizit churn v prvom roku.
+ * Billing cycle: monthly (EVERY_30_DAYS) or annual (ANNUAL) with two months
+ * free. The annual plan is paid upfront, which helps reduce churn in the
+ * first year.
  */
 import crypto from "node:crypto";
 import { db, encrypt, decrypt } from "./db.mjs";
@@ -27,8 +26,8 @@ export const PLANS = {
     id: "starter", name: "Starter", price: 19, orders: 2000, trial: 7,
     features: ["Daily checks", "Email alerts", "Conversion recovery"],
   },
-  // Ziadne "coming soon" v platenych planoch — predavat funkciu, ktora
-  // neexistuje, je dovod na zamietnutie pri App Store review (31.8.2026).
+  // No "coming soon" in paid plans: selling a feature that does not exist
+  // is grounds for rejection in App Store review.
   growth: {
     id: "growth", name: "Growth", price: 49, orders: 10000, trial: 7,
     features: ["Everything in Starter", "Meta comparison",
@@ -42,15 +41,15 @@ export const PLANS = {
 };
 
 /**
- * Rocny cyklus: 10x mesacna cena, teda dva mesiace zadarmo. Shopify uctuje
- * celu sumu naraz pri potvrdeni.
+ * Annual cycle: 10x the monthly price, i.e. two months free. Shopify charges
+ * the full amount at once on confirmation.
  */
 export const BILLING_CYCLES = {
   monthly: { id: "monthly", interval: "EVERY_30_DAYS", months: 1, label: "month" },
   annual:  { id: "annual",  interval: "ANNUAL",        months: 10, label: "year" },
 };
 
-/** Cena za dany plan a cyklus. Free zostava 0 v oboch. */
+/** Price for a plan and cycle. Free stays 0 in both. */
 export function cyclePrice(planId, cycleId = "monthly") {
   const plan = PLANS[planId];
   const cycle = BILLING_CYCLES[cycleId];
@@ -60,8 +59,8 @@ export function cyclePrice(planId, cycleId = "monthly") {
 }
 
 /**
- * Nazov predplatneho u Shopify. Mesacny si drzi povodny tvar ("TrackGap
- * Starter"), aby sa uz beziacim merchantom plan po deployi nerozpadol na free.
+ * Subscription name at Shopify. Monthly keeps the original form ("TrackGap
+ * Starter") so existing merchants do not fall back to free after a deploy.
  */
 export function subscriptionName(planId, cycleId = "monthly") {
   const plan = PLANS[planId];
@@ -71,7 +70,7 @@ export function subscriptionName(planId, cycleId = "monthly") {
     : `TrackGap ${plan.name}`;
 }
 
-/** Spatny rozklad nazvu z Shopify na { plan, cycle }. */
+/** Parses a Shopify subscription name back into { plan, cycle }. */
 export function parseSubscriptionName(name) {
   for (const cycleId of ["annual", "monthly"]) {
     for (const planId of Object.keys(PLANS)) {
@@ -145,11 +144,11 @@ mutation Cancel($id: ID!) {
 }`;
 
 /**
- * Zrusi aktivne predplatne u Shopify.
+ * Cancels the active subscription at Shopify.
  *
- * Bez toho downgrade na free len prepisal plan v nasej DB a merchantovi sa
- * dalej strhavalo — appka ho povazovala za free, Shopify za platiaceho.
- * Audit 31.8.2026, bod 7.
+ * Without this, downgrading to free only rewrote the plan in our DB while the
+ * merchant kept being charged: the app considered them free, Shopify a paying
+ * customer.
  */
 export async function cancelSubscription(shop, token) {
   const active = await verifySubscription(shop, token);
@@ -165,8 +164,8 @@ export async function cancelSubscription(shop, token) {
 }
 
 /**
- * Vytvori predplatne. Vrati URL, kam treba merchanta presmerovat —
- * bez jeho potvrdenia v Shopify admine sa nic nestrhne.
+ * Creates a subscription. Returns the URL to redirect the merchant to;
+ * nothing is charged without their confirmation in the Shopify admin.
  */
 export async function createSubscription(shop, token, planId, isTest = false,
                                          cycleId = "monthly") {
@@ -176,13 +175,13 @@ export async function createSubscription(shop, token, planId, isTest = false,
   if (!cycle) throw new Error(`unknown billing cycle: ${cycleId}`);
 
   if (plan.price === 0) {
-    // downgrade na free MUSI zrusit platene predplatne u Shopify
+    // a downgrade to free MUST cancel the paid subscription at Shopify
     let cancelled = null;
     try {
       cancelled = await cancelSubscription(shop, token);
     } catch (e) {
-      // radsej zlyhat nahlas, nez tvrdit merchantovi ze je na free
-      // a nechat Shopify uctovat dalej
+      // better to fail loudly than tell the merchant they are on free
+      // while Shopify keeps charging
       throw new Error(`Could not cancel the paid subscription: ${e.message}`);
     }
     setPlan(shop, "free", null, "ACTIVE", "monthly");
@@ -195,8 +194,8 @@ export async function createSubscription(shop, token, planId, isTest = false,
   // proration atomically after approval.
   const state = createBillingState(shop, planId, cycleId);
   const d = await gql(shop, token, CREATE_SUB, {
-    // Nazov nesie aj cyklus — verifySubscription z neho spatne cita, co
-    // merchant realne plati. Shopify nam interval v odpovedi nevracia.
+    // The name also carries the cycle; verifySubscription reads back what the
+    // merchant actually pays from it. Shopify does not return the interval.
     name: subscriptionName(planId, cycleId),
     price: String(cyclePrice(planId, cycleId)),
     trial: plan.trial,
@@ -224,7 +223,7 @@ const ACTIVE_SUBS = `{
   }
 }`;
 
-/** Overi u Shopify, co merchant naozaj plati — nie co je v nasej DB. */
+/** Asks Shopify what the merchant actually pays, not what our DB says. */
 export async function verifySubscription(shop, token) {
   const d = await gql(shop, token, ACTIVE_SUBS);
   const subs = d.currentAppInstallation?.activeSubscriptions || [];
@@ -364,17 +363,17 @@ export function currentPlan(shopDomain) {
 }
 
 /**
- * Kontrola limitu. Nezablokuje merchanta uprostred mesiaca — len oznami,
- * ze prekrocil plan. Tvrde zablokovanie sluzby, za ktoru uz zaplatil,
- * by bolo dovodom na zlu recenziu.
+ * Limit check. Does not block the merchant mid-month; it only reports that
+ * the plan was exceeded. Hard-blocking a service they already paid for would
+ * be a reason for a bad review.
  */
 export function checkLimit(shopDomain) {
   const plan = currentPlan(shopDomain);
   if (plan.orders === null) return { ok: true, unlimited: true };
 
   const s = db.prepare("SELECT id FROM shops WHERE shop_domain=?").get(shopDomain);
-  // Obchod este nemame v DB (prva poziadavka pred token exchange). Limit aj tak
-  // vratime — inak UI ukaze "0 of undefined", co reviewer aj videl (10.9.2026).
+  // The store is not in the DB yet (first request before token exchange). Return
+  // the limit anyway; otherwise the UI shows "0 of undefined".
   if (!s) {
     return { ok: true, used: 0, limit: plan.orders, plan: plan.id, pct: 0,
              message: null };
@@ -392,7 +391,7 @@ export function checkLimit(shopDomain) {
     pct: Math.round((used / plan.orders) * 100),
     message: used > plan.orders
       ? `You are over the ${plan.name} limit (${used} of ${plan.orders} orders `
-        + "this month). Checks keep running — upgrade when convenient."
+        + "this month). Checks keep running - upgrade when convenient."
       : null,
   };
 }

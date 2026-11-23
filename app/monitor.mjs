@@ -1,20 +1,22 @@
 /**
- * TrackGap — cache a monitoring.
+ * TrackGap - cache and monitoring.
  *
- * Cache: kontrola tahá 60 dní objednávok zo Shopify a 60 dní z GA4. Bez cache
- * by kazdé otvorenie dashboardu spustilo desiatky API volaní. GA4 ma navyše
- * tokenovú kvótu na property — bezúčelné behy ju míňajú merchantovi.
+ * Cache: a check pulls 60 days of Shopify orders and 60 days from GA4.
+ * Without a cache every dashboard open would trigger dozens of API calls.
+ * GA4 also has a per-property token quota; pointless runs burn the
+ * merchant's quota.
  *
- * Monitoring: bez neho by merchant musel klikať sám. Cely zmysel produktu je,
- * ze sa ozve v den, ked sa tracking pokazi — nie o mesiac pri fakturacii.
+ * Monitoring: without it the merchant would have to click manually. The
+ * point of the product is to speak up on the day tracking breaks, not a
+ * month later at invoicing time.
  */
 import { db } from "./db.mjs";
 
 const CACHE_TTL_MIN = 60;
 
-// Schema tychto tabuliek zije v db.mjs (jedno miesto pravdy).
-// Predtym boli definovane aj tu, takze vysledna schema zavisela
-// od poradia importov — audit 31.8.2026, bod 3.
+// The schema of these tables lives in db.mjs (single source of truth).
+// They used to be defined here as well, so the resulting schema depended
+// on import order.
 
 export function getCached(shopId) {
   const r = db.prepare(
@@ -26,9 +28,10 @@ export function getCached(shopId) {
 }
 
 /**
- * Posledny vysledok BEZ ohladu na TTL — pre stale-while-revalidate.
- * Dashboard ho ukaze okamzite a cerstvy sa dopocita na pozadi; bez toho
- * merchant pri kazdom otvoreni cakal na plny 60-dnovy check.
+ * Latest result REGARDLESS of TTL, for stale-while-revalidate.
+ * The dashboard shows it immediately and a fresh one is computed in the
+ * background; without this the merchant waited for the full 60-day check
+ * on every open.
  */
 export function getStale(shopId) {
   const r = db.prepare(
@@ -63,8 +66,8 @@ export function recordRun(shopId, result) {
 }
 
 /**
- * Porovna posledny beh s predoslymi a vrati alerty.
- * Hlasi len ZMENU K HORSIEMU — nie stav, ktory trva uz tyzdne.
+ * Compares the latest run with previous ones and returns alerts.
+ * Reports only a CHANGE FOR THE WORSE, not a state that has lasted for weeks.
  */
 export function detectRegressions(shopId, result) {
   const prev = db.prepare(
@@ -77,18 +80,18 @@ export function detectRegressions(shopId, result) {
   const alerts = [];
   const baseline = prev.reduce((a, p) => a + (p.missing_pct || 0), 0) / prev.length;
 
-  // 1) skokovy narast chybajucich objednavok
+  // 1) sudden jump in missing orders
   if (s.missing_pct > baseline + 10 && s.missing_pct > 10) {
     alerts.push({
       kind: "missing_spike",
       message: `Untracked orders jumped to ${s.missing_pct}% `
              + `(previously around ${baseline.toFixed(1)}%). Something in your `
-             + "tracking most likely broke — check recent changes in GTM or "
+             + "tracking most likely broke - check recent changes in GTM or "
              + "your theme.",
     });
   }
 
-  // 2) GA4 uplne prestalo prijimat
+  // 2) GA4 stopped receiving entirely
   if (s.ga4_transactions === 0 && prev[0].ga4_rows > 0) {
     alerts.push({
       kind: "ga4_silent",
@@ -97,7 +100,7 @@ export function detectRegressions(shopId, result) {
     });
   }
 
-  // 3) objavili sa duplicity, predtym neboli
+  // 3) duplicates appeared where there were none
   if (s.duplicates > 0 && prev.every((p) => (p.duplicates || 0) === 0)) {
     alerts.push({
       kind: "duplicates_new",
@@ -107,7 +110,7 @@ export function detectRegressions(shopId, result) {
     });
   }
 
-  // 4) zmenil sa charakter rozdielu v sumach
+  // 4) the nature of the value difference changed
   if (prev[0].value_kind && prev[0].value_kind !== s.value_gap_kind
       && s.value_gap_kind === "inconsistent") {
     alerts.push({
@@ -118,11 +121,12 @@ export function detectRegressions(shopId, result) {
     });
   }
 
-  // 5) pixel prestal hlasit
+  // 5) the pixel stopped reporting
   //
-  // Toto je porucha SAMOTNEHO MERANIA, nie obchodu: predtym pixel data posielal
-  // a teraz nie. Merchant o nej inak nema ako vediet — dashboard by len ticho
-  // prestal vediet rozlisit pricinu chybajucich objednavok.
+  // This is a failure of the MEASUREMENT ITSELF, not the store: the pixel
+  // used to send data and now does not. The merchant has no other way to
+  // learn about it; the dashboard would just silently lose the ability to
+  // tell why orders are missing.
   if (prev.some((p) => p.pixel_active) && !s.pixel_active) {
     alerts.push({
       kind: "pixel_silent",
@@ -141,7 +145,7 @@ export function saveAlerts(shopId, alerts) {
     "INSERT INTO alerts (shop_id, kind, message) VALUES (?,?,?)");
   db.transaction(() => {
     for (const a of alerts) {
-      // neposielaj to iste dva razy za 24 h
+      // do not send the same thing twice within 24 h
       const dup = db.prepare(
         `SELECT 1 FROM alerts WHERE shop_id=? AND kind=?
            AND created_at > datetime('now','-1 day')`).get(shopId, a.kind);

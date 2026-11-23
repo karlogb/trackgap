@@ -1,4 +1,4 @@
-# TrackGap — Google Ads API Tool Documentation
+# TrackGap - Google Ads API Tool Documentation
 
 **Company:** NullLogic s.r.o. (Slovakia)
 **Product:** TrackGap
@@ -22,8 +22,8 @@ the merchant has no practical way to determine whether the difference is a
 tracking failure, a consent decision by the visitor, or an attribution window.
 
 TrackGap answers that question. It reads the merchant's orders server-side from
-the Shopify Admin API — the one source that ad blockers and consent banners
-cannot suppress — and compares them against what each connected platform
+the Shopify Admin API - the one source that ad blockers and consent banners
+cannot suppress - and compares them against what each connected platform
 actually recorded.
 
 ## 2. What we use the Google Ads API for
@@ -78,7 +78,7 @@ with merchants or third parties.
 
 ## 4. Who uses the tool
 
-E-commerce merchants operating Shopify stores who advertise on Google Ads —
+E-commerce merchants operating Shopify stores who advertise on Google Ads -
 typically small and mid-sized businesses managing their own advertising
 accounts. The tool is distributed publicly through the Shopify App Store.
 
@@ -114,7 +114,7 @@ Privacy policy: https://trackgap.example.com/privacy
 The merchant sees a dashboard inside their Shopify admin showing:
 
 - the share of orders that were not tracked, and their value
-- that gap split by cause — broken tracking, declined consent, or no identifier
+- that gap split by cause - broken tracking, declined consent, or no identifier
 - per-platform comparison of orders against reported conversions
 - alerts by email when tracking degrades compared with previous checks
 

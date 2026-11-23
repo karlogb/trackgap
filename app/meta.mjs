@@ -1,22 +1,21 @@
 /**
- * TrackGap — Meta (Facebook) connector.
+ * TrackGap - Meta (Facebook) connector.
  *
- * Verified against developers.facebook.com on 2026-08-31:
+ * Based on developers.facebook.com:
  *
  * READ: Insights API returns AGGREGATES ONLY (per campaign x day). There is no
- * endpoint that lists individual conversions with an order ID — CAPI /events is
+ * endpoint that lists individual conversions with an order ID - CAPI /events is
  * write-only. So unlike GA4 we cannot name the missing orders, only compare
- * daily counts. Untracked has the same limitation ("Daily conversion counts and
- * values from the account you link — nothing else").
+ * daily counts.
  *
  * WRITE: Conversions API accepts server-side Purchase events. Meta's own docs
  * recommend using the order number as event_id, which is exactly what we have.
- * Hard limit: event_time may not be older than 7 DAYS — a single stale event
+ * Hard limit: event_time may not be older than 7 DAYS - a single stale event
  * makes Meta reject the whole request. Since we run off the orders/create
  * webhook we are inside that window within seconds.
  *
  * AUTH: merchant pastes an access token generated in Events Manager. This
- * deliberately avoids Meta App Review — reading someone else's ad account via
+ * deliberately avoids Meta App Review - reading someone else's ad account via
  * OAuth would need Advanced access plus business verification.
  */
 import crypto from "node:crypto";
@@ -56,8 +55,8 @@ CREATE TABLE IF NOT EXISTS meta_daily (
 
 export function saveMetaConfig(shopId, cfg) {
   const prev = db.prepare("SELECT * FROM meta_config WHERE shop_id = ?").get(shopId);
-  // Ciastkovy update nesmie zmazat token — vola sa aj bez neho (napr. pri
-  // vybere ad uctu po OAuth prihlaseni).
+  // A partial update must not delete the token; it is also called without one
+  // (e.g. when picking an ad account after OAuth login).
   const tokenEnc = cfg.token !== undefined && cfg.token !== null
     ? encrypt(cfg.token)
     : (prev?.token_enc ?? null);
@@ -85,7 +84,7 @@ export function metaConfig(shopId) {
   return { ...r, token: r.token_enc ? decrypt(r.token_enc) : null };
 }
 
-/** Ad accounts the token can see — lets the merchant pick from a list. */
+/** Ad accounts the token can see - lets the merchant pick from a list. */
 export async function listAdAccounts(token) {
   const r = await fetch(
     `${GRAPH}/me/adaccounts?fields=id,name,account_status,currency`
@@ -99,14 +98,14 @@ export async function listAdAccounts(token) {
 }
 
 /**
- * Pixely, ktore token vidi. Merchant tak nemusi hladat Pixel ID rucne —
- * staci mu vlozit token a vybrat zo zoznamu.
+ * Pixels the token can see, so the merchant does not have to look up the
+ * Pixel ID by hand: paste the token and pick from the list.
  */
 export async function listPixels(token, adAccountIds = []) {
   const out = [];
   const seen = new Set();
 
-  // 1) pixely naviazane na reklamne ucty
+  // 1) pixels attached to ad accounts
   for (const acc of adAccountIds.slice(0, 10)) {
     try {
       const r = await fetch(
@@ -116,10 +115,10 @@ export async function listPixels(token, adAccountIds = []) {
       for (const p of j.data || []) {
         if (!seen.has(p.id)) { seen.add(p.id); out.push({ id: p.id, name: p.name }); }
       }
-    } catch { /* ucet nemusi mat pixel */ }
+    } catch { /* the account may have no pixel */ }
   }
 
-  // 2) pixely cez business ucty — token z Events Managera casto vidi len tieto
+  // 2) pixels via business accounts: an Events Manager token often sees only these
   if (!out.length) {
     try {
       const b = await fetch(`${GRAPH}/me/businesses?fields=id,name&limit=25`
@@ -133,12 +132,12 @@ export async function listPixels(token, adAccountIds = []) {
           if (!seen.has(p.id)) { seen.add(p.id); out.push({ id: p.id, name: p.name }); }
         }
       }
-    } catch { /* nemusi mat pravo na business */ }
+    } catch { /* may lack business permissions */ }
   }
   return out;
 }
 
-/** Daily purchase counts and values. Aggregates only — Meta has nothing finer. */
+/** Daily purchase counts and values. Aggregates only - Meta has nothing finer. */
 export async function fetchDailyConversions(token, adAccountId, since, until,
                                             actionType) {
   const params = new URLSearchParams({
@@ -173,7 +172,7 @@ const sha256 = (v) =>
  * event_id = order number, per Meta's own deduplication guidance: if the pixel
  * already sent the same order, Meta keeps one (48h window).
  *
- * We refuse to send when we have no identifier at all — an unmatched event
+ * We refuse to send when we have no identifier at all - an unmatched event
  * cannot be used for attribution or optimisation, so it is noise.
  */
 export async function sendCapiPurchase(cfg, order, identity) {
@@ -184,7 +183,7 @@ export async function sendCapiPurchase(cfg, order, identity) {
   const ageDays = (Date.now() - new Date(order.created_at).getTime()) / 86400_000;
   if (ageDays > 7) {
     return { sent: false, reason: "older_than_7_days",
-      note: "Meta rejects events with event_time older than 7 days — and a "
+      note: "Meta rejects events with event_time older than 7 days - and a "
           + "single stale event makes it drop the whole request." };
   }
 
@@ -198,7 +197,7 @@ export async function sendCapiPurchase(cfg, order, identity) {
 
   if (!Object.keys(user).length) {
     return { sent: false, reason: "no_identifier",
-      note: "No fbp/fbc or hashed contact detail — Meta could not match the "
+      note: "No fbp/fbc or hashed contact detail - Meta could not match the "
           + "event to a person, so it would not count for attribution." };
   }
 

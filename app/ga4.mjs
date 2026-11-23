@@ -1,12 +1,13 @@
 /**
- * TrackGap — GA4 konektor.
+ * TrackGap - GA4 connector.
  *
- * Merchant pripoji vlastny Google ucet cez OAuth; citame pod jeho credentials,
- * takze kvoty Data API idu na jeho projekt, nie na nas. Scope je read-only.
+ * The merchant connects their own Google account via OAuth; we read with
+ * their credentials, so Data API quotas go to their project, not ours.
+ * The scope is read-only.
  *
- * Overene 30.8.2026 na 32 zivych e-shopoch: transactionId sa vracia ako
- * dimenzia, kombinovatelna s date/source/medium, a '(other)' sa neobjavilo
- * ani pri 2 839 transakciach za 30 dni.
+ * transactionId is returned as a dimension that can be combined with
+ * date/source/medium; in testing, '(other)' rows did not appear even for
+ * stores with thousands of transactions over 30 days.
  */
 import { readSecret } from "./secrets.mjs";
 
@@ -63,7 +64,7 @@ export async function accessToken(refreshToken) {
   return (await r.json()).access_token;
 }
 
-/** Zoznam GA4 property, ku ktorym ma merchant pristup. */
+/** GA4 properties the merchant has access to. */
 export async function listProperties(token) {
   const r = await fetch(
     "https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200",
@@ -81,8 +82,8 @@ export async function listProperties(token) {
 }
 
 /**
- * Vytiahne transakcie z GA4 za obdobie.
- * Vrati [{transaction_id, revenue, event_count, date, source, medium}]
+ * Fetches GA4 transactions for a period.
+ * Returns [{transaction_id, revenue, event_count, date, source, medium}]
  */
 export async function fetchTransactions(token, propertyId, startDate, endDate) {
   const body = {
@@ -114,8 +115,8 @@ export async function fetchTransactions(token, propertyId, startDate, endDate) {
   if (!r.ok) throw new Error(`runReport ${r.status}: ${await r.text()}`);
   const j = await r.json();
 
-  // agregujeme po transaction_id — jedna objednavka moze prist vo viacerych
-  // riadkoch (rozne zdroje), a prave viacnasobny vyskyt je signal duplicity
+  // aggregate by transaction_id: one order can arrive in several rows
+  // (different sources), and a repeated occurrence is a duplicate signal
   const map = new Map();
   for (const row of j.rows || []) {
     const [tid, date, source, medium] = row.dimensionValues.map((d) => d.value);

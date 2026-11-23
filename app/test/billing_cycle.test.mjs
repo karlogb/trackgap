@@ -1,9 +1,9 @@
 /**
- * Rocny fakturacny cyklus.
+ * Annual billing cycle.
  *
- * Kriticke je spatne citanie nazvu predplatneho: Shopify nam v
- * activeSubscriptions nevracia interval, takze cyklus poznat len z nazvu.
- * Ak sa rozbije parsovanie, merchantovi spadne plan na free hoci plati.
+ * Reading the subscription name back is critical: Shopify does not return
+ * the interval in activeSubscriptions, so the cycle is known only from the
+ * name. If parsing breaks, a paying merchant falls back to the free plan.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -12,25 +12,25 @@ import {
   createSubscription,
 } from "../billing.mjs";
 
-test("rocna cena je 10x mesacna, teda dva mesiace zadarmo", () => {
+test("annual price is 10x monthly, i.e. two months free", () => {
   assert.equal(cyclePrice("starter", "annual"), 190);
   assert.equal(cyclePrice("growth", "annual"), 490);
   assert.equal(cyclePrice("pro", "annual"), 990);
 });
 
-test("mesacny cyklus nemeni cenu ani nazov", () => {
+test("monthly cycle changes neither price nor name", () => {
   for (const id of Object.keys(PLANS)) {
     assert.equal(cyclePrice(id, "monthly"), PLANS[id].price);
     assert.equal(subscriptionName(id, "monthly"), `TrackGap ${PLANS[id].name}`);
   }
 });
 
-test("free je zadarmo v oboch cykloch", () => {
+test("free is free in both cycles", () => {
   assert.equal(cyclePrice("free", "monthly"), 0);
   assert.equal(cyclePrice("free", "annual"), 0);
 });
 
-test("nazov predplatneho sa da spatne rozlozit na plan a cyklus", () => {
+test("subscription name can be parsed back into plan and cycle", () => {
   for (const planId of Object.keys(PLANS)) {
     for (const cycleId of Object.keys(BILLING_CYCLES)) {
       const name = subscriptionName(planId, cycleId);
@@ -39,24 +39,24 @@ test("nazov predplatneho sa da spatne rozlozit na plan a cyklus", () => {
   }
 });
 
-test("uz beziace mesacne predplatne sa po deployi neprepadne na free", () => {
-  // presne retazce, ktore su dnes ulozene u Shopify
+test("an existing monthly subscription does not fall back to free after deploy", () => {
+  // exact strings currently stored at Shopify
   assert.deepEqual(parseSubscriptionName("TrackGap Starter"),
                    { plan: "starter", cycle: "monthly" });
   assert.deepEqual(parseSubscriptionName("TrackGap Pro"),
                    { plan: "pro", cycle: "monthly" });
 });
 
-test("neznamy nazov skonci na free, nie na vynimke", () => {
+test("an unknown name falls back to free, not to an exception", () => {
   assert.deepEqual(parseSubscriptionName("Some Other App Plan"),
                    { plan: "free", cycle: "monthly" });
 });
 
-test("neznamy cyklus je chyba, nie ticho mesacny", () => {
+test("an unknown cycle is an error, not silently monthly", () => {
   assert.throws(() => cyclePrice("starter", "weekly"), /unknown billing cycle/);
 });
 
-test("zmena plateneho planu nerusi povodny plan pred schvalenim", async () => {
+test("changing a paid plan does not cancel the current plan before approval", async () => {
   const originalFetch = global.fetch;
   const calls = [];
   global.fetch = async (_url, options) => {

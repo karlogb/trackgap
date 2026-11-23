@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TrackGap — find the orders your analytics never saw</title>
+<title>TrackGap - find the orders your analytics never saw</title>
 <meta name="description" content="TrackGap compares your Shopify orders against what actually reached GA4 and Meta. It names the missing orders, tells you why, and can send them back.">
 <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
 <link rel="canonical" href="https://trackgap.example.com/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TrackGap">
 <meta property="og:url" content="https://trackgap.example.com/">
-<meta property="og:title" content="TrackGap — find the orders your analytics never saw">
+<meta property="og:title" content="TrackGap - find the orders your analytics never saw">
 <meta property="og:description" content="Your store says 100 orders. GA4 says 82. TrackGap tells you which ones are missing, what they were worth, and why.">
 <meta property="og:image" content="https://trackgap.example.com/assets/shot-overview.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1440">
 <meta property="og:image:alt" content="TrackGap dashboard comparing Shopify orders with GA4 transactions">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="TrackGap — find the orders your analytics never saw">
+<meta name="twitter:title" content="TrackGap - find the orders your analytics never saw">
 <meta name="twitter:description" content="Your store says 100 orders. GA4 says 82. TrackGap tells you which ones are missing, what they were worth, and why.">
 <meta name="twitter:image" content="https://trackgap.example.com/assets/shot-overview.png">
 <link rel="icon" href="/assets/favicon.ico">
@@ -25,7 +25,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<!-- prevzate z /v2: strukturovane data pre rich results (app + FAQ) -->
+<!-- structured data for rich results (app + FAQ) -->
 <script type="application/ld+json">
 {
   "@context":"https://schema.org",
@@ -69,7 +69,7 @@
   ]
 }
 </script>
-<!-- Google tag: placeholder GA4 ID, nastav vlastny. Consent defaultne denied. -->
+<!-- Google tag: placeholder GA4 ID, set your own. Consent defaults to denied. -->
 <script>
 window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}
 gtag('consent','default',{analytics_storage:'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied',wait_for_update:500});
@@ -303,7 +303,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
   footer a{color:var(--dim);margin-right:18px;text-decoration:none}
   footer a:hover{color:var(--ink)}
-  /* --- prevzate z /v2: trust line + rovnica 100-82=18 --- */
+  /* --- trust line + equation 100-82=18 --- */
   .trust{padding:20px 0 0}
   .trustline{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
              padding:20px 0;display:flex;align-items:center;justify-content:center;
@@ -332,7 +332,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
     .op{display:none}
     .causes{grid-template-columns:1fr}
   }
-  /* --- setup pasik (prevzate z /v2) --- */
+  /* --- setup strip --- */
   .setup{margin-top:38px;padding-top:30px;border-top:1px solid var(--line)}
   .setuphead{font-size:13px;letter-spacing:.08em;text-transform:uppercase;
              color:var(--teal);margin-bottom:18px}
@@ -346,7 +346,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   .sstep span{color:var(--dim);font-size:13.5px;line-height:1.55}
   @media(max-width:760px){.stepgrid{grid-template-columns:1fr}}
 
-  /* --- prevzate z /v2: dalsie dva screenshoty produktu --- */
+  /* --- two more product screenshots --- */
   .shots2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
   .shotcard{background:var(--card);border:1px solid var(--line);border-radius:14px;
             overflow:hidden}
@@ -358,7 +358,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   .shotcard span{color:var(--dim);font-size:13.5px;line-height:1.55}
   @media(max-width:760px){.shots2{grid-template-columns:1fr}}
 
-  /* --- prevzate z /v2: FAQ --- */
+  /* --- FAQ --- */
   .faqs{max-width:820px}
   .faqs details{border-top:1px solid var(--line);padding:20px 0}
   .faqs details:last-child{border-bottom:1px solid var(--line)}
@@ -370,7 +370,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   .faqs details[open] summary::after{content:"−"}
   .faqs details p{color:var(--dim);font-size:14.5px;margin:12px 45px 2px 0}
 
-  /* --- prevzate z /v2: consent lista pre GA4 --- */
+  /* --- consent bar for GA4 --- */
   .consent{position:fixed;z-index:60;left:18px;right:18px;bottom:18px;
            max-width:650px;margin:auto;background:var(--card2);
            border:1px solid var(--line2);border-radius:14px;padding:18px;
@@ -413,7 +413,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       <p class="lead">
         Somewhere between the sale and your analytics, orders go missing.
         TrackGap tells you which ones, what they were worth, and whether it is
-        actually broken — or just someone declining cookies.
+        actually broken - or just someone declining cookies.
       </p>
       <div class="acts">
         <a class="btn primary" href="https://apps.shopify.com/trackgap">Install on Shopify</a>
@@ -425,7 +425,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
     <div class="term" aria-hidden="true">
       <div class="bar">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-        <b>trackgap · reconcile — last 30 days</b>
+        <b>trackgap · reconcile - last 30 days</b>
       </div>
       <div class="sum">
         <div><span>Shopify</span><b data-count="100">0</b></div>
@@ -445,7 +445,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   </div>
 </header>
 
-<!-- prevzate z /v2: kratke uistenie hned pod hero, kym ma navstevnik pozornost -->
+<!-- short reassurance right under the hero, while the visitor is paying attention -->
 <div class="trust">
   <div class="wrap trustline">
     <b>Your store data stays yours.</b>
@@ -455,12 +455,12 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   </div>
 </div>
 
-<!-- prevzate z /v2: produkt vysvetleny tromi cislami skor nez textom -->
+<!-- the product explained with three numbers before any text -->
 <section id="equation">
   <div class="wrap rev">
     <h2>Shopify knows what sold.<br>GA4 knows what it saw.</h2>
     <p class="sub">TrackGap sits between those two numbers and shows you exactly
-      where they stopped matching — and which part of the gap is worth fixing.</p>
+      where they stopped matching - and which part of the gap is worth fixing.</p>
     <div class="equation">
       <div class="metric"><span>Shopify orders</span><b>100</b></div>
       <div class="op">−</div>
@@ -480,14 +480,14 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   <div class="wrap rev">
     <h2>One screen. The whole answer.</h2>
     <p class="sub">The big number is the share of orders that never reached your
-      analytics. Under it, the same gap split by cause — because half of it is
+      analytics. Under it, the same gap split by cause - because half of it is
       usually consent, and that part you cannot fix.</p>
     <div class="shotwrap"><img src="/assets/shot-overview.png"
       alt="TrackGap dashboard showing 7.9% of conversions untracked" loading="lazy"></div>
     <p class="cap">The revenue figure is the sum of the missing orders as your
-      store recorded them — not an estimate from ad spend you typed in.</p>
+      store recorded them - not an estimate from ad spend you typed in.</p>
 
-    <!-- prevzate z /v2: recovery a monitoring, nie len overview -->
+    <!-- recovery and monitoring, not just the overview -->
     <div class="shots2">
       <div class="shotcard">
         <img src="/assets/shot-2-recovery.png" alt="TrackGap conversion recovery report" loading="lazy">
@@ -496,7 +496,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
           back to GA4 with its original source.</span></div>
       </div>
       <div class="shotcard">
-        <img src="/assets/shot-2-recovery.png" alt="TrackGap findings — untracked orders listed by number" loading="lazy">
+        <img src="/assets/shot-2-recovery.png" alt="TrackGap findings - untracked orders listed by number" loading="lazy">
         <div><b>Find out the day it breaks</b>
         <span>Daily checks and email alerts turn silent reporting drift into a
           problem you can act on while it is fresh.</span></div>
@@ -512,7 +512,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       hundred threads like these.</p>
     <div class="quotes">
       <div class="q">
-        <p>Each week is so different — about 10&nbsp;–&nbsp;20% of orders are missing.
+        <p>Each week is so different - about 10&nbsp;–&nbsp;20% of orders are missing.
           Asked Shopify support but they say it's a problem with Google.</p>
         <span>community.shopify.com</span>
       </div>
@@ -562,7 +562,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       </div>
     </div>
 
-    <!-- prevzate z /v2: odpoved na "je to zlozite nasadit?" -->
+    <!-- answers "is it hard to set up?" -->
     <div class="setup">
       <div class="setuphead">Setting it up takes minutes</div>
       <div class="stepgrid">
@@ -586,7 +586,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   <div class="wrap rev">
     <h2>Not another audit tool</h2>
     <p class="sub">Audit tools load your site and check whether the tag fires.
-      That is useful — and it is not the same question.</p>
+      That is useful - and it is not the same question.</p>
     <div class="tbl">
       <table>
         <tr><th>&nbsp;</th><th>Audit tools</th><th>TrackGap</th></tr>
@@ -601,7 +601,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
     </div>
     <p class="cap">If you need to know whether your tracking plan is correctly
       implemented, use an audit tool. If you need to know whether yesterday's
-      orders arrived — that is this.</p>
+      orders arrived - that is this.</p>
   </div>
 </section>
 
@@ -609,7 +609,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   <div class="wrap rev">
     <h2>Pricing</h2>
     <p class="sub">Billed through Shopify, on the invoice you already get.
-      The limit is monthly orders — going over it does not stop the checks,
+      The limit is monthly orders - going over it does not stop the checks,
       we just tell you.</p>
     <div class="plans">
       <div class="plan">
@@ -645,7 +645,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       I run measurement for around eighty e-commerce stores. The same thing
       kept happening: a client's numbers stopped matching, and finding out why
       meant exporting orders, pulling GA4 transactions and diffing them in a
-      spreadsheet — every time, by hand.
+      spreadsheet - every time, by hand.
     </p>
     <p>
       One store had been sending every purchase to GA4 twice since April.
@@ -659,7 +659,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       of this app: <span class="hl">it looks, every day, so you do not
       have to.</span>
     </p>
-    <p class="sig">— Karol Bolgár, NullLogic</p>
+    <p class="sig">- Karol Bolgár, NullLogic</p>
   </div>
 </section>
 
@@ -669,7 +669,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       <div>
         <h3>Rather not fix it yourself?</h3>
         <p>TrackGap finds the problem. Fixing it usually means going into GTM,
-          consent mode or server-side tagging — which is what I do for a living.</p>
+          consent mode or server-side tagging - which is what I do for a living.</p>
         <p>Same person who built this app. No sales call, just email me.</p>
       </div>
       <a class="btn ghost" href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a>
@@ -677,7 +677,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
   </div>
 </section>
 
-<!-- prevzate z /v2: FAQ — musi sediet s FAQPage JSON-LD v hlavicke -->
+<!-- FAQ: must match the FAQPage JSON-LD in the head -->
 <section id="faq">
   <div class="wrap rev">
     <h2>Shopify tracking gaps, explained</h2>
@@ -739,7 +739,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
 (function(){
   var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // count-up v hero termináli
+  // count-up in the hero terminal
   document.querySelectorAll("[data-count]").forEach(function(el){
     var target = +el.dataset.count;
     if (reduced) { el.textContent = target; return; }
@@ -751,7 +751,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
       if (p < 1) requestAnimationFrame(step);
     }
     setTimeout(function(){ requestAnimationFrame(step); }, 250);
-    // poistka: throttlovany rAF (tab v pozadi) nesmie nechat nuly
+    // safeguard: a throttled rAF (background tab) must not leave zeros
     setTimeout(function(){ el.textContent = target; }, 2600);
   });
 
@@ -769,7 +769,7 @@ gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
 })();
 </script>
 
-<!-- prevzate z /v2: consent lista — analytics_storage sa zapne az po suhlase -->
+<!-- consent bar: analytics_storage is enabled only after consent -->
 <div class="consent" id="analytics-consent" role="dialog" aria-label="Analytics cookies" aria-live="polite">
   <p>We use Google Analytics to understand how this page is used. Analytics
     storage stays off unless you accept. See our <a href="/privacy">privacy policy</a>.</p>

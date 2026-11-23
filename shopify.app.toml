@@ -1,8 +1,8 @@
-# TrackGap — Shopify app configuration
+# TrackGap - Shopify app configuration
 #
-# client_id je verejny identifikator appky (nie tajomstvo).
-# App secret patri do .env (SHOPIFY_API_SECRET) alebo .secrets/shopify.json; do gitu nejde.
-# Example config: nahrad client_id a trackgap.example.com vlastnymi hodnotami.
+# client_id is the app's public identifier (not a secret).
+# The app secret belongs in .env (SHOPIFY_API_SECRET) or .secrets/shopify.json; never in git.
+# Example config: replace client_id and trackgap.example.com with your own values.
 
 name = "TrackGap"
 handle = "trackgap"
@@ -11,11 +11,11 @@ application_url = "https://trackgap.example.com"
 embedded = true
 
 [access_scopes]
-# read_orders je protected customer data (Level 1 staci — bez mena, mailu,
-# adresy a telefonu). read_pixels je potrebny na najdenie a aktualizaciu
-# existujuceho pixelu. write_pixels + read_customer_events: bez nich sa pixel
-# neda aktivovat
-# a neziskame GA4 client_id -> doplnanie konverzii by nefungovalo.
+# read_orders is protected customer data (Level 1 is enough: no name, e-mail,
+# address or phone). read_pixels is needed to find and update the existing
+# pixel. write_pixels + read_customer_events: without them the pixel cannot
+# be activated
+# and we get no GA4 client_id -> conversion backfill would not work.
 scopes = "read_orders,read_pixels,write_pixels,read_customer_events"
 
 [auth]
@@ -39,16 +39,16 @@ api_version = "2026-07"
   topics = [ "app_subscriptions/update" ]
   uri = "https://trackgap.example.com/webhooks/billing"
 
-  # GDPR compliance webhooky maju vlastnu sekciu — do subscriptions NEPATRIA.
-  # Overene 31.8.2026: deploy padne na "The following topic is invalid".
+  # GDPR compliance webhooks have their own section; they do NOT belong in subscriptions.
+  # Otherwise deploy fails with "The following topic is invalid".
   [webhooks.privacy_compliance]
   customer_data_request_url = "https://trackgap.example.com/webhooks/gdpr"
   customer_deletion_url = "https://trackgap.example.com/webhooks/gdpr"
   shop_deletion_url = "https://trackgap.example.com/webhooks/gdpr"
 
-# App Proxy: /apps/trackgap na domene obchodu -> nas server.
-# Vdaka tomu ide pixel first-party cestou, ktoru neblokuju adblockery ani ITP.
-# Kazda poziadavka je podpisana (`signature`) a overuje sa v shopify.mjs.
+# App Proxy: /apps/trackgap on the store domain -> our server.
+# This gives the pixel a first-party path that ad blockers and ITP do not block.
+# Every request is signed (`signature`) and verified in shopify.mjs.
 [app_proxy]
 url = "https://trackgap.example.com/proxy"
 subpath = "trackgap"

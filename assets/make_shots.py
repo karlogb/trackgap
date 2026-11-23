@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Vygeneruje assets/shot-overview.png a assets/shot-2-recovery.png
-z realneho app/ui.html.
+"""Generates assets/shot-overview.png and assets/shot-2-recovery.png
+from the real app/ui.html.
 
-UI sa nacita v headless Chromiu s podvrhnutym api() a demo datami
-(demo-store.com: 38 objednavok, 3 missing, 7.9 %, €34, dummy Measurement ID).
-Oba zabery su 2560x1440 vyrezy tej istej stranky: overview zacina na vrchu,
-recovery je odscrolovany na "What is actually wrong" a "Conversion recovery".
+The UI is loaded in headless Chromium with a stubbed api() and demo data
+(demo-store.com: 38 orders, 3 missing, 7.9 %, €34, dummy Measurement ID).
+Both shots are 2560x1440 crops of the same page: overview starts at the top,
+recovery is scrolled to "What is actually wrong" and "Conversion recovery".
 
-Pozor: snap Chromium necita /tmp, preto sa harness stavia do ~/.
-Pouzitie: python3 assets/make_shots.py
+Note: snap Chromium cannot read /tmp, so the harness is built in ~/.
+Usage: python3 assets/make_shots.py
 """
 import pathlib, re, subprocess, tempfile
 from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# nazov suboru -> zvisly offset vyrezu v celostrankovom renderi
+# file name -> vertical crop offset in the full-page render
 SHOTS = {"shot-overview.png": 0, "shot-2-recovery.png": 800}
 
 STUB = """
-// demo stub — prepise api() a naplni dashboard datami pre screenshot
+// demo stub: overrides api() and fills the dashboard with data for the screenshot
 const DEMO = {
   "/state": {ga4_connected:true, ga4_property_id:"properties/123",
              primary_domain:"demo-store.com", backfill_enabled:true,
@@ -51,7 +51,7 @@ const DEMO = {
     {ran_at:"2026-08-27T06:00", missing:1, missing_pct:2.8, duplicates:0}
   ],
 };
-// 30 dni pre graf — deterministicke, ziadna nahoda medzi behmi
+// 30 days for the chart: deterministic, no randomness between runs
 DEMO["/daily"] = Array.from({length:30},(_,i)=>{
   const d=new Date(2026,7,2+i);
   const orders=[1,2,1,0,2,1,3][i%7]+((i*7)%3);
@@ -74,9 +74,9 @@ loadHistory();
 """
 
 html = (ROOT / "app" / "ui.html").read_text()
-# App Bridge z CDN by v headless behu len blokoval load
+# App Bridge from the CDN would only block load in a headless run
 html = re.sub(r'<script src="https://cdn\.shopify\.com[^"]*"></script>', "", html)
-# stub ide na koniec hlavneho <script> bloku
+# the stub goes at the end of the main <script> block
 i = html.rindex("</script>")
 html = html[:i] + "\n" + STUB + "\n" + html[i:]
 

@@ -1,12 +1,12 @@
 /**
- * TrackGap — e-mailove alerty.
+ * TrackGap - e-mail alerts.
  *
- * Cely zmysel produktu je, ze sa ozve v DEN, ked sa tracking pokazi.
- * Dashboard, na ktory sa nikto nepozera, problem nevyriesi.
+ * The point of the product is to speak up on the DAY tracking breaks.
+ * A dashboard nobody looks at does not solve the problem.
  *
- * Posielame LEN ked sa nieco zhorsilo oproti predoslym behom (monitor.mjs ->
- * detectRegressions). Denny sumar "vsetko je v poriadku" je cesta k tomu,
- * ze si merchant nastavi filter a alerty prestane citat.
+ * We send ONLY when something got worse compared to previous runs
+ * (monitor.mjs -> detectRegressions). A daily "all is well" summary teaches
+ * the merchant to set up a filter and stop reading alerts.
  */
 import fs from "node:fs";
 import { db } from "./db.mjs";
@@ -33,12 +33,12 @@ function smtpConfig() {
 }
 
 /**
- * Odosle mail cez Proton Bridge.
+ * Sends a mail through Proton Bridge.
  *
- * Samotny SMTP dialog zije v smtp.mjs — povodna verzia tu nerobila STARTTLS
- * (Bridge bez neho odmieta AUTH) a stav posuvala na kazdom TCP chunku, takze
- * pri viacriadkovej odpovedi poslala prikaz mimo poradia. Alert by teda
- * neodisiel prave vtedy, ked na nom najviac zalezi.
+ * The SMTP dialogue lives in smtp.mjs. An earlier version here did not do
+ * STARTTLS (Bridge refuses AUTH without it) and advanced its state on every
+ * TCP chunk, so a multi-line reply made it send commands out of order. The
+ * alert would then fail exactly when it matters most.
  */
 async function sendMail({ to, subject, text }) {
   const cfg = smtpConfig();
@@ -56,14 +56,14 @@ const SUBJECTS = {
 };
 
 /**
- * Zavaznost nalezu — urcuje predmet mailu, ked ich je viac naraz.
- * Ticho v GA4 a slepy pixel su vypadok merania; duplicity a rozdiel v sumach
- * su nepresnost. To prve treba riesit dnes.
+ * Finding severity; decides the mail subject when several findings arrive at
+ * once. GA4 silence and a blind pixel are tracking outages; duplicates and
+ * value mismatches are inaccuracies. The former must be fixed today.
  */
 const SEVERITY = {
-  // Najvyssia zavaznost vobec: pri strate pristupu appka NEVIE POVEDAT NIC.
-  // Vypadok GA4 je zisteny problem; toto je slepota — kazdy dalsi nalez
-  // v tom case chyba, lebo nema z coho vzniknut.
+  // Highest severity of all: after losing access the app CANNOT SAY ANYTHING.
+  // A GA4 outage is a detected problem; this is blindness, because any other
+  // finding during that time is missing, having nothing to be derived from.
   access_lost: 6,
   ga4_silent: 5,
   pixel_silent: 4,
@@ -77,10 +77,10 @@ function buildBody(shopDomain, alerts, summary) {
   const list = Array.isArray(alerts) ? alerts : [alerts];
   const lines = [];
 
-  // STRATA PRISTUPU sa nesmie miesat s cislami z poslednej kontroly.
-  // Tie su stare a appka uz nevie, ci este platia — ukazat ich vedla vety
-  // "nevidime do tvojho obchodu" je priamy protiklad zmyslu tohto mailu.
-  // Merchant ma dostat jednu vec: co ma kliknut, aby appka zase videla.
+  // LOST ACCESS must not be mixed with numbers from the last check. Those are
+  // stale and the app no longer knows whether they hold; showing them next to
+  // "we cannot see your store" contradicts the purpose of this mail.
+  // The merchant should get one thing: what to click so the app can see again.
   const blind = list.find((a) => a.kind === "access_lost");
   if (blind) {
     return [
@@ -91,14 +91,14 @@ function buildBody(shopDomain, alerts, summary) {
       "",
       `Reconnect here: ${app}`,
       "",
-      "—",
+      "-",
       "This is the only case where we email you about TrackGap itself",
       "rather than about your store.",
     ].join("\n");
   }
 
-  // Viac nalezov = ocislovany zoznam. Jednu vec necislujeme, aby mail
-  // s jedinym problemom nevyzeral ako report.
+  // Several findings = numbered list. A single item is not numbered so a
+  // mail about one problem does not look like a report.
   if (list.length === 1) {
     lines.push(list[0].message);
   } else {
@@ -109,13 +109,13 @@ function buildBody(shopDomain, alerts, summary) {
   lines.push(
     "",
     "Where things stand right now:",
-    `  Orders compared:     ${summary?.orders_compared ?? "—"}`,
-    `  Missing in GA4:      ${summary?.missing ?? "—"} (${summary?.missing_pct ?? "—"}%)`,
-    `  Duplicates:          ${summary?.duplicates ?? "—"}`,
+    `  Orders compared:     ${summary?.orders_compared ?? "-"}`,
+    `  Missing in GA4:      ${summary?.missing ?? "-"} (${summary?.missing_pct ?? "-"}%)`,
+    `  Duplicates:          ${summary?.duplicates ?? "-"}`,
   );
 
-  // Rozpad podla vrstiev je to najhodnotnejsie, co vieme povedat: hovori
-  // merchantovi, CO ma opravit, nie len ze nieco nesedi.
+  // The per-layer breakdown is the most valuable thing we can say: it tells
+  // the merchant WHAT to fix, not just that something does not match.
   const nf = summary?.never_fired;
   const db_ = summary?.delivery_broken;
   if (nf || db_) {
@@ -138,28 +138,28 @@ function buildBody(shopDomain, alerts, summary) {
     "",
     `Open TrackGap: ${app}`,
     "",
-    "—",
+    "-",
     "You are getting this because tracking on your store changed for the worse.",
-    "TrackGap does not send routine summaries — only real problems.",
+    "TrackGap does not send routine summaries - only real problems.",
   );
   return lines.join("\n");
 }
 
 /**
- * Odosle cakajuce alerty. Vola sa po kazdej kontrole.
- * Nikdy nehodi vynimku smerom von — zlyhany mail nesmie zhodit kontrolu.
+ * Sends pending alerts. Called after every check.
+ * Never throws: a failed mail must not break the check.
  *
- * JEDEN MAIL NA OBCHOD: predtym sa posielal mail za KAZDY nalez, takze jedna
- * kontrola vedela poslat tri maily za sebou (overene 1.9.2026 na demo obchode:
- * `duplicates_new` a `value_broke` z jedneho behu = dva samostatne maily).
- * Merchant, ktoreho appka trikrat po sebe upozorni na to iste rano, si na nu
- * nastavi filter — a alert, kvoli ktoremu appka existuje, sa uz nikdy neprecita.
+ * ONE MAIL PER STORE: previously a mail was sent for EVERY finding, so a
+ * single check could send several mails in a row (e.g. `duplicates_new` and
+ * `value_broke` from one run produced two separate mails). A merchant warned
+ * three times in one morning sets up a filter, and the alert the app exists
+ * for is never read again.
  */
 export async function flushAlerts() {
   const pending = pendingAlerts();
   if (!pending.length) return { sent: 0 };
 
-  // zoskupenie podla obchodu
+  // group by store
   const byShop = new Map();
   for (const a of pending) {
     if (!byShop.has(a.shop_id)) byShop.set(a.shop_id, []);
@@ -172,15 +172,15 @@ export async function flushAlerts() {
       "SELECT id, shop_domain, alert_email FROM shops WHERE id = ?").get(shopId);
     const to = shop?.alert_email;
     if (!to) {
-      // bez adresy nie je kam poslat — oznac ako spracovane, nech sa nehromadi
+      // no address to send to: mark as processed so they do not pile up
       for (const a of group) markSent(a.id);
       continue;
     }
 
-    // Odoslanie je dokaz, ze kanal nie je rozbity. NEHOVORIME `delivered`:
-    // bounce chodi asynchronne a nam, takze v tomto bode vieme len to, ze
-    // relay spravu prevzal. `sent` je presne to, co vieme — pomenovat to
-    // `delivered` by bola presne ta domienka, ktora nas dostala.
+    // Sending proves the channel is not broken. We do NOT say `delivered`:
+    // bounces arrive asynchronously, so at this point we only know the relay
+    // accepted the message. `sent` is exactly what we know; calling it
+    // `delivered` would be an unverified assumption.
     const markMail = (status, err) => db.prepare(
       "UPDATE shops SET alert_email_status=?, alert_email_error=? WHERE id=?")
       .run(status, err, shopId);
@@ -191,9 +191,9 @@ export async function flushAlerts() {
        FROM check_history WHERE shop_id = ? ORDER BY ran_at DESC LIMIT 1`)
       .get(shopId);
 
-    // Predmet urcuje NAJZAVAZNEJSI nalez, nie nahodne prvy z DB. Merchant vidi
-    // v schranke len predmet — ma z neho poznat, ci je to porucha merania,
-    // alebo len duplicity.
+    // The subject is decided by the MOST SEVERE finding, not the first one
+    // from the DB. The merchant only sees the subject in the inbox and should
+    // be able to tell a tracking outage from mere duplicates.
     const primary = [...group].sort(
       (a, b) => (SEVERITY[b.kind] ?? 0) - (SEVERITY[a.kind] ?? 0))[0];
     const subject = group.length === 1
@@ -209,10 +209,10 @@ export async function flushAlerts() {
       sent += 1;
     } catch (e) {
       console.error(`alert mail failed (${shop.shop_domain}):`, e.message);
-      // Zlyhany alert sa NESMIE oznacit ako odoslany — ostava pending a
-      // skusi sa znova. Zaroven si to pamatame na obchode, aby to merchant
-      // videl v UI: inak by appka mlcala a tvarila sa, ze mlci preto,
-      // lebo je vsetko v poriadku.
+      // A failed alert must NOT be marked as sent: it stays pending and is
+      // retried. We also record it on the store so the merchant sees it in
+      // the UI; otherwise the app would stay silent and look as if it were
+      // silent because everything is fine.
       markMail("failed", String(e.message).slice(0, 300));
     }
   }
@@ -222,12 +222,12 @@ export async function flushAlerts() {
 export async function sendTest(shopDomain, to) {
   return sendMail({
     to,
-    subject: "TrackGap — test alert",
+    subject: "TrackGap - test alert",
     text: [
       `This is a test alert for ${shopDomain}.`,
       "",
       "If you are reading this, alerts are working. You will only hear from us",
-      "when something about your tracking gets worse — not on a schedule.",
+      "when something about your tracking gets worse - not on a schedule.",
       "",
       `${appUrl()}/app?shop=${encodeURIComponent(shopDomain)}`,
     ].join("\n"),

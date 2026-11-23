@@ -1,14 +1,15 @@
 /**
- * Alerty: jedna kontrola = JEDEN mail na obchod.
+ * Alerts: one check = ONE mail per store.
  *
- * PRECO TENTO TEST: 1.9.2026 poslal jeden beh na demo obchode dva samostatne
- * maily (`duplicates_new` + `value_broke`). Merchant, ktoreho appka zasype
- * viacerymi mailmi z jednej kontroly, si na nu nastavi filter — a alert,
- * kvoli ktoremu appka existuje, sa uz nikdy neprecita.
+ * WHY THIS TEST: a single run once sent two separate mails
+ * (`duplicates_new` + `value_broke`). A merchant flooded with several mails
+ * from one check sets up a filter, and the alert the app exists for is never
+ * read again.
  *
- * Testuje sa proti SKUTOCNEMU SMTP serveru na loopbacku, nie proti podvrhnutej
- * funkcii: ESM export sa prepisat neda a hlavne — takto prejde aj realny
- * dialog z smtp.mjs (STARTTLS sa v tomto sinku neponuka, takze sa preskoci).
+ * Tested against a REAL SMTP server on loopback, not a stubbed function:
+ * an ESM export cannot be overwritten and, more importantly, this exercises
+ * the real dialogue from smtp.mjs (this sink does not offer STARTTLS, so it
+ * is skipped).
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -22,7 +23,7 @@ const CFG = path.join(os.tmpdir(), `tg_smtp_${process.pid}.json`);
 process.env.TRACKGAP_DB = DB;
 process.env.TRACKGAP_SMTP_CONFIG = CFG;
 
-/** Minimalny SMTP sink — zapamata si prijate spravy. */
+/** Minimal SMTP sink that remembers received messages. */
 const outbox = [];
 function startSink() {
   return new Promise((resolve) => {
@@ -55,7 +56,7 @@ function startSink() {
           else sock.write("250 ok\r\n");
         }
       });
-      sock.on("error", () => { /* klient zavesil */ });
+      sock.on("error", () => { /* client hung up */ });
     });
     srv.listen(0, "127.0.0.1", () => resolve(srv));
   });
@@ -77,7 +78,7 @@ before(async () => {
 after(() => {
   sink?.close();
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`, CFG]) {
-    try { fs.unlinkSync(f); } catch { /* nevadi */ }
+    try { fs.unlinkSync(f); } catch { /* ignore */ }
   }
 });
 
@@ -92,33 +93,33 @@ function seed(email = "merchant@example.com") {
 const add = (kind, msg) => db.prepare(
   "INSERT INTO alerts (shop_id, kind, message) VALUES (1,?,?)").run(kind, msg);
 
-test("dva nalezy z jednej kontroly = jeden mail", async () => {
+test("two findings from one check = one mail", async () => {
   seed();
   add("duplicates_new", "4 duplicate transactions appeared.");
   add("value_broke", "Order values stopped matching.");
 
   const r = await alerts.flushAlerts();
-  assert.equal(r.sent, 1, "mal odist prave jeden mail");
-  assert.equal(outbox.length, 1, "na drote sa objavila viac nez jedna sprava");
-  // oba nalezy musia byt v tele — zoskupenie nesmie ziadny zahodit
+  assert.equal(r.sent, 1, "exactly one mail should have been sent");
+  assert.equal(outbox.length, 1, "more than one message appeared on the wire");
+  // both findings must be in the body; grouping must not drop any
   assert.match(outbox[0], /duplicate transactions/);
   assert.match(outbox[0], /Order values stopped matching/);
   assert.equal(
     db.prepare("SELECT COUNT(*) c FROM alerts WHERE sent_at IS NULL").get().c, 0);
 });
 
-test("predmet urcuje najzavaznejsi nalez, nie poradie v DB", async () => {
+test("the subject is set by the most severe finding, not DB order", async () => {
   seed();
-  add("duplicates_new", "dupes");        // vlozene PRV
+  add("duplicates_new", "dupes");        // inserted FIRST
   add("ga4_silent", "GA4 recorded nothing.");
 
   await alerts.flushAlerts();
   assert.match(outbox[0], /Subject: .*stopped recording orders/,
-    "predmet ma patrit vypadku GA4, nie duplicitam");
+    "the subject should belong to the GA4 outage, not to duplicates");
   assert.match(outbox[0], /\+1 more/);
 });
 
-test("jediny nalez nie je cislovany zoznam", async () => {
+test("a single finding is not a numbered list", async () => {
   seed();
   add("ga4_silent", "GA4 recorded nothing.");
   await alerts.flushAlerts();
@@ -126,7 +127,7 @@ test("jediny nalez nie je cislovany zoznam", async () => {
   assert.doesNotMatch(outbox[0], /\+\d+ more/);
 });
 
-test("obchod bez adresy: nic sa neposiela, ale alerty sa nehromadia", async () => {
+test("store without an address: nothing is sent, but alerts do not pile up", async () => {
   seed(null);
   add("ga4_silent", "x");
   const r = await alerts.flushAlerts();
@@ -134,5 +135,5 @@ test("obchod bez adresy: nic sa neposiela, ale alerty sa nehromadia", async () =
   assert.equal(outbox.length, 0);
   assert.equal(
     db.prepare("SELECT COUNT(*) c FROM alerts WHERE sent_at IS NULL").get().c, 0,
-    "nedorucitelne alerty by sa inak hromadili donekonecna");
+    "undeliverable alerts would otherwise pile up forever");
 });

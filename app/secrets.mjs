@@ -1,13 +1,13 @@
 /**
- * TrackGap — konfiguracne tajomstva.
+ * TrackGap - configuration secrets.
  *
- * Dva zdroje, v tomto poradi:
- *   1. JSON subor v adresari TRACKGAP_SECRETS (default: ../.secrets vedla app/)
+ * Two sources, in this order:
+ *   1. JSON files in the TRACKGAP_SECRETS directory (default: ../.secrets next to app/)
  *      shopify.json, google.json, meta.json, smtp.json
- *   2. premenne prostredia (pozri .env.example v koreni repozitara)
+ *   2. environment variables (see .env.example in the repository root)
  *
- * Cesty k tajomstvam su na jednom mieste, aby presun na iny server nerozbil
- * polovicu integracii.
+ * Secret paths live in one place so that moving to another server does not
+ * break half of the integrations.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -19,12 +19,12 @@ const SECRETS_DIR = process.env.TRACKGAP_SECRETS
 
 const env = (k) => (process.env[k] && process.env[k].trim()) || undefined;
 
-/** Verejna URL appky (bez lomitka na konci). */
+/** Public URL of the app (without a trailing slash). */
 export function appUrl() {
   return (env("TRACKGAP_APP_URL") || "https://trackgap.example.com").replace(/\/+$/, "");
 }
 
-/** Ekvivalent JSON suborov poskladany z env premennych. */
+/** Equivalent of the JSON files, built from environment variables. */
 const FROM_ENV = {
   "shopify.json": () => env("SHOPIFY_API_KEY") && env("SHOPIFY_API_SECRET") && {
     client_id: env("SHOPIFY_API_KEY"),
@@ -50,7 +50,7 @@ export function secretPath(name) {
   return path.join(SECRETS_DIR, name);
 }
 
-/** Nacita secret zo suboru alebo z env; vrati null, ak nie je nikde. */
+/** Loads a secret from a file or env; returns null if it is not found anywhere. */
 export function readSecret(name) {
   const p = secretPath(name);
   if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf8"));
@@ -58,15 +58,15 @@ export function readSecret(name) {
 }
 
 /**
- * Cesta k SMTP configu (JSON: host, smtp_port, user, password).
- * Ak subor neexistuje, alerts.mjs pouzije SMTP_* env premenne.
+ * Path to the SMTP config (JSON: host, smtp_port, user, password).
+ * If the file does not exist, alerts.mjs uses the SMTP_* env variables.
  */
 export function smtpConfigPath() {
   if (process.env.TRACKGAP_SMTP_CONFIG) return process.env.TRACKGAP_SMTP_CONFIG;
   return secretPath("smtp.json");
 }
 
-/** SMTP config z env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD). */
+/** SMTP config from env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD). */
 export function smtpConfigFromEnv() {
   if (!env("SMTP_HOST")) return null;
   return {

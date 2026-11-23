@@ -1,11 +1,12 @@
 /**
- * TrackGap — databaza.
+ * TrackGap - database.
  *
- * SQLite lokalne na VPS. Disk NIE JE sifrovany (overene 30.8.2026: ext4, ziadny
- * LUKS), a Shopify pri protected customer data vyzaduje sifrovanie at rest.
- * Riesenie: citlive polia (access/refresh tokeny) sa sifruju v aplikacii cez
- * AES-256-GCM pred zapisom. Objednavky obsahuju LEN ID, sumu, cas a UTM —
- * ziadne meno, e-mail, adresu ani telefon (PCD Level 1, datova minimalizacia).
+ * Local SQLite on the VPS. The disk is NOT encrypted (ext4, no LUKS), and
+ * Shopify requires encryption at rest for protected customer data.
+ * Solution: sensitive fields (access/refresh tokens) are encrypted in the
+ * application with AES-256-GCM before writing. Orders contain ONLY the ID,
+ * amount, time and UTM: no name, e-mail, address or phone (PCD Level 1,
+ * data minimisation).
  */
 import Database from "better-sqlite3";
 import crypto from "node:crypto";
@@ -38,9 +39,9 @@ export function decrypt(blob) {
   return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8");
 }
 
-// `TRACKGAP_DB` umoznuje testom bezat nad vlastnym suborom. Bez toho by sa
-// testy pisali do produkcnej DB — a keby ju niekto omylom spustil na serveri,
-// zamiesal by merchantovi realne data.
+// `TRACKGAP_DB` lets tests run against their own file. Without it tests
+// would write into the production DB, and if someone ran them on the server
+// by mistake they would mix into real merchant data.
 export const db = new Database(
   process.env.TRACKGAP_DB || path.join(DATA_DIR, "trackgap.db"));
 db.pragma("journal_mode = WAL");
@@ -68,7 +69,7 @@ CREATE TABLE IF NOT EXISTS shops (
   token_expires_at     TEXT
 );
 
--- PCD Level 1: ziadne osobne udaje
+-- PCD Level 1: no personal data
 CREATE TABLE IF NOT EXISTS orders (
   shop_id          INTEGER NOT NULL REFERENCES shops(id),
   order_id         TEXT NOT NULL,
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(shop_id, created_at);
 
--- dedup prichadzajucich webhookov (X-Shopify-Webhook-Id)
+-- dedup of incoming webhooks (X-Shopify-Webhook-Id)
 CREATE TABLE IF NOT EXISTS webhook_log (
   webhook_id TEXT PRIMARY KEY,
   topic      TEXT,
@@ -99,10 +100,10 @@ CREATE TABLE IF NOT EXISTS webhook_log (
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_seen ON webhook_log(seen_at);
 
--- identita z web pixelu: GA4 client_id + reklamne click ID
--- POZOR: definovane LEN tu. backfill.mjs a monitor.mjs uz vlastne CREATE TABLE
--- nemaju — dve definicie tej istej tabulky znamenali, ze schema zavisela od
--- poradia importov (audit 31.8.2026, bod 3).
+-- identity from the web pixel: GA4 client_id + ad click IDs
+-- NOTE: defined ONLY here. backfill.mjs and monitor.mjs no longer have their
+-- own CREATE TABLE; two definitions of the same table meant the schema
+-- depended on import order.
 CREATE TABLE IF NOT EXISTS identities (
   shop_id        INTEGER NOT NULL REFERENCES shops(id),
   checkout_token TEXT,
@@ -118,9 +119,9 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE INDEX IF NOT EXISTS idx_ident_order ON identities(shop_id, order_id);
 CREATE INDEX IF NOT EXISTS idx_identities_seen ON identities(seen_at);
 
--- Rezervacia objednavky pred odoslanim konverzie.
--- orders/create a orders/updated chodia sucasne; bez tohto zamku obidva presli
--- kontrolou a konverzia odisla dvakrat (overene naostro 31.8.2026).
+-- Reserves an order before its conversion is sent.
+-- orders/create and orders/updated arrive simultaneously; without this lock both
+-- passed the check and the conversion was sent twice.
 CREATE TABLE IF NOT EXISTS backfill_locks (
   shop_id    INTEGER NOT NULL,
   order_id   TEXT NOT NULL,
@@ -128,7 +129,7 @@ CREATE TABLE IF NOT EXISTS backfill_locks (
   PRIMARY KEY (shop_id, order_id)
 );
 
--- pokusy o doplnenie konverzie (GA4 MP / Meta CAPI)
+-- conversion backfill attempts (GA4 MP / Meta CAPI)
 CREATE TABLE IF NOT EXISTS backfills (
   id         INTEGER PRIMARY KEY,
   shop_id    INTEGER NOT NULL REFERENCES shops(id),
@@ -141,7 +142,7 @@ CREATE TABLE IF NOT EXISTS backfills (
 CREATE INDEX IF NOT EXISTS idx_backfills_shop ON backfills(shop_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_backfills_order ON backfills(shop_id, order_id);
 
--- historia kontrol a cache vysledkov
+-- check history and result cache
 CREATE TABLE IF NOT EXISTS check_history (
   id           INTEGER PRIMARY KEY,
   shop_id      INTEGER NOT NULL REFERENCES shops(id),
@@ -172,7 +173,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS idx_alerts_pending ON alerts(shop_id, sent_at);
 
 
--- co realne odislo z prehliadaca (nas web pixel)
+-- what actually left the browser (our web pixel)
 CREATE TABLE IF NOT EXISTS pixel_events (
   shop_id    INTEGER NOT NULL REFERENCES shops(id),
   order_id   TEXT NOT NULL,
@@ -181,7 +182,7 @@ CREATE TABLE IF NOT EXISTS pixel_events (
   PRIMARY KEY (shop_id, order_id, event_type)
 );
 
--- co dorazilo do GA4 (tahane cez merchantov OAuth)
+-- what reached GA4 (fetched via the merchant's OAuth)
 CREATE TABLE IF NOT EXISTS ga4_events (
   shop_id        INTEGER NOT NULL REFERENCES shops(id),
   transaction_id TEXT NOT NULL,
@@ -245,22 +246,23 @@ const migrations = [
   { version: 1, run() {} },
 
   /**
-   * v2 — pixel_events ako plnohodnotna TRETIA VRSTVA merania.
+   * v2 - pixel_events as a full THIRD MEASUREMENT LAYER.
    *
-   * Povodna tabulka mala PK (shop_id, order_id, event_type) a NIKDY sa do nej
-   * nezapisovalo — server ukladal `checkout_completed` len ako "identitu".
-   * Tym padom sa nedalo odlisit "GA4 to nedostalo" od "nikdy to neodislo",
-   * co je jediny dovod, preco vlastny pixel vobec mame.
+   * The original table had PK (shop_id, order_id, event_type) and was NEVER
+   * written to: the server stored `checkout_completed` only as an "identity".
+   * So it was impossible to tell "GA4 did not receive it" from "it never left
+   * the browser", which is the whole reason we have our own pixel.
    *
-   * Problem povodneho PK: v okamihu `checkout_completed` casto NEPOZNAME
-   * order_id (Shopify ho v evente nemusi vyplnit) — kotvou je vtedy
-   * checkout_token a order_id sa doplni az z webhooku orders/create.
+   * Problem with the original PK: at `checkout_completed` time we often do NOT
+   * know the order_id (Shopify may leave it empty in the event); the anchor is
+   * then checkout_token and order_id is filled in later from the
+   * orders/create webhook.
    *
-   * Preto jedinecnost NESMIE stat na order_id: to sa casom meni z NULL na
-   * hodnotu a kazdy opakovany event (keepalive retry, refresh dakovnej
-   * stranky) by po doplneni vytvoril dalsi riadok a tvaril sa ako duplicita,
-   * ktoru sme si sposobili sami. Kluc je preto stabilna kotva:
-   * checkout_token, a az ked chyba, order_id.
+   * So uniqueness must NOT rely on order_id: it changes from NULL to a value
+   * over time, and every repeated event (keepalive retry, thank-you page
+   * refresh) would create another row after the fill-in and look like a
+   * self-inflicted duplicate. The key is therefore a stable anchor:
+   * checkout_token, and order_id only when it is missing.
    */
   {
     version: 2,
@@ -291,12 +293,12 @@ const migrations = [
   },
 
   /**
-   * v3 — historia si pamata aj rozpad podla vrstiev.
+   * v3 - history also stores the per-layer breakdown.
    *
-   * Bez toho by e-mailovy alert vedel povedat len "chyba 18 %", ale nie
-   * CO ma merchant opravit — a prave to je jediny dovod, preco vlastny pixel
-   * mame. detectRegressions navyse potrebuje predoslu hodnotu, aby vedel
-   * rozoznat NOVU poruchu od tej, ktora trva uz tyzden.
+   * Without it an e-mail alert could only say "18 % missing", but not WHAT the
+   * merchant should fix, which is the whole reason we have our own pixel.
+   * detectRegressions also needs the previous value to tell a NEW failure
+   * from one that has lasted a week.
    */
   {
     version: 3,
@@ -310,12 +312,13 @@ const migrations = [
   },
 
   /**
-   * v4 — vseobecna cache pod vlastnym klucom.
+   * v4 - generic cache under its own key.
    *
-   * check_cache ma shop_id ako PRIMARY KEY a cudzi kluc na shops(id), takze
-   * pojme presne jeden zaznam na obchod. Ads report je iny dotaz s inym
-   * obdobim; napchat ho tam pod zapornym shop_id by znamenalo rozbity cudzi
-   * kluc a kolize s kontrolou. Vlastna tabulka je cistejsia aj lacnejsia.
+   * check_cache has shop_id as PRIMARY KEY and a foreign key to shops(id), so
+   * it holds exactly one record per store. The Ads report is a different query
+   * with a different period; storing it there under a negative shop_id would
+   * break the foreign key and collide with the check. A separate table is
+   * cleaner and cheaper.
    */
   {
     version: 4,
@@ -333,19 +336,19 @@ const migrations = [
   },
 
   /**
-   * v5 — spojenie identity naprieč navstevou cez Shopify `clientId`.
+   * v5 - linking identity across a visit via the Shopify `clientId`.
    *
-   * PRECO: pixel posiela identitu v dvoch kusoch, ktore sa doteraz nemali ako
-   * stretnut (overene na zivom obchode 1.9.2026):
-   *   - `page_viewed`        ma `_ga` client_id, ale este NEMA checkout token
-   *   - `checkout_completed`  ma token, ale uz NEMA `_ga` cookie (checkout bezi
-   *                           na inej domene, cookie sa tam necita)
-   * Vysledok: objednavka mala zaznam bez `ga_client_id` a doplnenie konverzie
-   * do GA4 sa nemalo o co oprieť — appka tvrdila "nie je co priradit", hoci
-   * client_id sme videli o par minut skor.
+   * WHY: the pixel sends identity in two pieces that previously had no way
+   * to meet:
+   *   - `page_viewed`        has the `_ga` client_id but NO checkout token yet
+   *   - `checkout_completed`  has the token but NO `_ga` cookie (checkout runs
+   *                           on another domain where the cookie is not read)
+   * Result: the order had a record without `ga_client_id` and the GA4
+   * conversion backfill had nothing to rely on; the app claimed "nothing to
+   * attribute" although the client_id had been seen minutes earlier.
    *
-   * `event.clientId` zo Shopify je ten isty po celu navstevu vratane checkoutu,
-   * takze sluzi ako spojka medzi tymi dvoma zaznamami.
+   * The Shopify `event.clientId` stays the same for the whole visit including
+   * checkout, so it links the two records.
    */
   {
     version: 5,
@@ -358,18 +361,18 @@ const migrations = [
   },
 
   /**
-   * v6 — appka si pamata, ze STRATILA PRISTUP.
+   * v6 - the app remembers that it LOST ACCESS.
    *
-   * PRECO: doteraz sa zlyhanie autorizacie nikam nezapisalo. Ked obchodu
-   * dobehol Shopify token (Shopify uz vydava len expirujuce) alebo merchant
-   * odobral Google pristup, `runCheck` hodilo vynimku, scheduler ju zalogoval
-   * a slo sa dalej. Navonok sa NESTALO NIC: ziadny alert, dashboard ukazoval
-   * stary vysledok z cache ako keby bol aktualny.
+   * WHY: previously an authorization failure was not recorded anywhere. When a
+   * store's Shopify token expired (Shopify only issues expiring tokens now) or
+   * the merchant revoked Google access, `runCheck` threw, the scheduler logged
+   * it and moved on. Outwardly NOTHING HAPPENED: no alert, and the dashboard
+   * showed a stale cached result as if it were current.
    *
-   * To je najhorsia mozna porucha prave pre tento produkt. Merchant si kupil
-   * appku, ktora ma STRAZIT meranie; ked oslepne, MUSI to povedat nahlas.
-   * Ticho sa na nerozoznanie podoba na "vsetko je v poriadku" — a presne
-   * v tom case mu moze vypadnut tracking a nedozvie sa o tom.
+   * That is the worst possible failure for this product. The merchant bought
+   * an app that is supposed to WATCH their tracking; when it goes blind it
+   * MUST say so. Silence is indistinguishable from "all is well", and that is
+   * exactly when tracking can break without anyone noticing.
    */
   {
     version: 6,
@@ -382,13 +385,13 @@ const migrations = [
     },
   },
   /**
-   * v7 — stav dorucitelnosti adresy pre alerty.
+   * v7 - deliverability status of the alert address.
    *
-   * PRECO: `alert_email` sama o sebe hovori len to, ze merchant nieco zadal.
-   * O tom, ci sa na tu adresu DA dorucit, appka nevedela nic — a bounce
-   * chodi NAM, nie jemu (1.9.2026: `app-review@example.com`, nullMX).
-   * Appka tak mohla mesiace tvrdit, ze alerty su nastavene, a pritom nemat
-   * ako dat vediet o comkolvek. Cely produkt stoji na tom jedinom kanali.
+   * WHY: `alert_email` by itself only says the merchant entered something.
+   * The app knew nothing about whether mail CAN be delivered there, and
+   * bounces come to US, not to the merchant (e.g. a nullMX domain). The app
+   * could claim for months that alerts were set up while having no way to
+   * notify anyone. The whole product depends on that single channel.
    */
   {
     version: 7,
@@ -397,36 +400,36 @@ const migrations = [
         ALTER TABLE shops ADD COLUMN alert_email_status TEXT;
         ALTER TABLE shops ADD COLUMN alert_email_error  TEXT;
       `);
-      // Adresy zadane pred touto migraciou nikto neoveril — nesmu vyzerat
-      // ako potvrdene len preto, ze su starsie.
+      // Addresses entered before this migration were never verified; they
+      // must not look confirmed just because they are older.
       d.exec(`UPDATE shops SET alert_email_status = 'unverified'
               WHERE alert_email IS NOT NULL`);
     },
   },
 
   /*
-   * v8 — ROZLISENIE "este nenastavene" od "prestalo fungovat".
+   * v8 - DISTINGUISHING "not set up yet" from "stopped working".
    *
-   * Bez tohto stlpca sa oboje javilo rovnako: chybajuci Google refresh token.
-   * Appka preto cerstvo nainstalovanemu obchodu tvrdila, ze "uz nevidi" do
-   * Analytics a "ma znovu pripojit" ucet, ktory nikdy pripojeny nebol —
-   * a zapisala si vlastnu poruchu, z ktorej po case dozrel poplasny e-mail
-   * o strate pristupu, ktory nikdy neexistoval.
+   * Without this column both looked the same: a missing Google refresh token.
+   * The app therefore told a freshly installed store that it "can no longer
+   * see" Analytics and should "reconnect" an account that was never
+   * connected, and recorded its own failure, which eventually turned into an
+   * alarm e-mail about lost access that never existed.
    *
-   * `ga4_connected_at` je jediny spolahlivy dokaz, ze spojenie UZ RAZ islo.
-   * Az potom je jeho zmiznutie porucha.
+   * `ga4_connected_at` is the only reliable proof that the connection has
+   * worked AT LEAST ONCE. Only then is its disappearance a failure.
    */
   {
     version: 8,
     run(d) {
       d.exec("ALTER TABLE shops ADD COLUMN ga4_connected_at TEXT");
-      // Obchody, ktore uz teraz maju refresh token, boli zjavne pripojene.
-      // Cas nepozname spatne, takze zapiseme cas migracie — pouziva sa len
-      // ako priznak "uz raz to islo", nie na meranie trvania.
+      // Stores that already have a refresh token were clearly connected.
+      // We do not know the time retroactively, so we store the migration time;
+      // it is only used as an "it worked once" flag, not to measure duration.
       d.exec(`UPDATE shops SET ga4_connected_at = CURRENT_TIMESTAMP
               WHERE google_refresh_enc IS NOT NULL`);
-      // Obchod, ktory Google nikdy nepripojil, nesmie zostat oznaceny za
-      // poruchu — inak by mu z tejto migracie rovno vypadol alert.
+      // A store that never connected Google must not stay flagged as failing;
+      // otherwise this migration alone would trigger an alert for it.
       d.exec(`UPDATE shops SET access_broken_kind = NULL,
                                access_broken_since = NULL,
                                access_broken_detail = NULL
@@ -436,16 +439,15 @@ const migrations = [
   },
 
   /*
-   * v9 — doplnenie dokazu o pripojeni pre obchody, ktorym token uz vyprsal.
+   * v9 - backfilling proof of connection for stores whose token has expired.
    *
-   * v8 oznacila len obchody s AKTIVNYM refresh tokenom. Lenze prave tie,
-   * ktorym spojenie vypadlo, ho uz nemaju — a tie su na tom najhorsie:
-   * appka by ich po v8 povazovala za "este nenastavene" a namiesto hlasenia
-   * o strate pristupu by im ukazovala onboarding. Skutocna porucha by tak
-   * zmizla z radaru.
+   * v8 only flagged stores with an ACTIVE refresh token. But the stores whose
+   * connection dropped no longer have one, and they are the worst off: after
+   * v8 the app would treat them as "not set up yet" and show onboarding
+   * instead of reporting lost access. A real failure would vanish from view.
    *
-   * `ga4_property_id` je spolahlivy dokaz: vybrat property sa da az zo
-   * zoznamu, ktory API vrati len pripojenemu uctu.
+   * `ga4_property_id` is reliable proof: a property can only be picked from a
+   * list the API returns to a connected account.
    */
   {
     version: 9,
@@ -457,7 +459,7 @@ const migrations = [
   },
 
   /*
-   * v10 — latest authenticated embedded-app session. Shopify can deliver an
+   * v10 - latest authenticated embedded-app session. Shopify can deliver an
    * uninstall after the merchant already reinstalled; this timestamp separates
    * the old installation generation without changing installed_at semantics.
    */
@@ -469,7 +471,7 @@ const migrations = [
   },
 
   /*
-   * v11 — Shopify billing state and per-charge terminal-event ledger.
+   * v11 - Shopify billing state and per-charge terminal-event ledger.
    * Explicit column detection means only the known legacy shape is tolerated;
    * lock/I/O/corruption errors still abort startup instead of being swallowed.
    */
@@ -519,11 +521,11 @@ for (const migration of migrations) {
 }
 
 /**
- * Ulozi obchod aj s tokenom.
+ * Saves the store together with its token.
  *
- * Shopify uz vydava LEN expirujuce offline tokeny, takze si okrem samotneho
- * tokenu drzime aj refresh_token a cas expiracie. Bez toho by appka po
- * niekolkych hodinach ticho prestala fungovat (31.8.2026).
+ * Shopify now issues ONLY expiring offline tokens, so besides the token
+ * itself we keep the refresh_token and expiry time. Without them the app
+ * would silently stop working after a few hours.
  */
 export function upsertShop(domain, token, refreshToken = null, expiresIn = null,
                            installationSeen = false) {
@@ -543,10 +545,10 @@ export function upsertShop(domain, token, refreshToken = null, expiresIn = null,
                 session_seen_at   = COALESCE(excluded.session_seen_at,
                                              shops.session_seen_at),
                 uninstalled_at    = NULL,
-                -- Reautorizacia je nova instalacia tokenu: ak sme predtym
-                -- hlasili stratu pristupu, uz neplati. Bez tohto by banner
-                -- "Checks are paused" svietil aj po naprave az do dalsej
-                -- kontroly — a merchant by nevedel, ci sa jeho klik chytil.
+                -- Reauthorization installs a new token: if we previously
+                -- reported lost access, it no longer applies. Without this the
+                -- "Checks are paused" banner would stay on after the fix until
+                -- the next check, and the merchant would not know it worked.
                 access_broken_kind   = NULL,
                 access_broken_since  = NULL,
                 access_broken_detail = NULL`)
@@ -593,13 +595,13 @@ export function shopToken(domain) {
   return r?.access_token_enc ? decrypt(r.access_token_enc) : null;
 }
 
-/** Token aj s informaciou, ci mu netreba obnovu. */
+/** Token plus whether it needs refreshing. */
 export function shopTokenInfo(domain) {
   const r = db.prepare(
     `SELECT access_token_enc, refresh_token_enc, token_expires_at
      FROM shops WHERE shop_domain = ?`).get(domain);
   if (!r?.access_token_enc) return null;
-  // obnovujeme s rezervou 5 minut, nie az ked token dobehne
+  // refresh with a 5-minute margin, not only once the token has expired
   const expired = r.token_expires_at
     && new Date(r.token_expires_at).getTime() - Date.now() < 5 * 60_000;
   return {
@@ -611,11 +613,11 @@ export function shopTokenInfo(domain) {
 }
 
 /**
- * Zaznamena, ze appka STRATILA PRISTUP k zdroju dat.
+ * Records that the app LOST ACCESS to a data source.
  *
- * `since` sa nastavi len pri PRVOM zlyhani — aby sa dalo povedat "uz tri dni
- * nevidime do tvojho obchodu". Opakovane zlyhanie cas nepresuva, inak by
- * porucha vyzerala vzdy ako cerstva a nikdy by nedozrela na alert.
+ * `since` is set only on the FIRST failure so we can say "we have not been
+ * able to see your store for three days". Repeated failures do not move it;
+ * otherwise the failure would always look fresh and never mature into an alert.
  */
 export function markAccessBroken(shopId, kind, detail) {
   db.prepare(`UPDATE shops SET
@@ -628,7 +630,7 @@ export function markAccessBroken(shopId, kind, detail) {
     .run(kind, detail ? String(detail).slice(0, 300) : null, kind, shopId);
 }
 
-/** Pristup je opat v poriadku — zahodi zaznam o poruche. */
+/** Access is fine again: drops the failure record. */
 export function clearAccessBroken(shopId) {
   db.prepare(`UPDATE shops SET access_broken_kind = NULL,
                 access_broken_since = NULL, access_broken_detail = NULL

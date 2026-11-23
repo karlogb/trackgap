@@ -1,28 +1,28 @@
 /**
- * TrackGap — Google Ads cez GA4.
+ * TrackGap - Google Ads via GA4.
  *
- * PRECO CEZ GA4 A NIE CEZ ADS API:
- * Google Ads API vyzaduje developer token, ktory Google schvaluje tyzdne az
- * mesiace a pri novej firme ho casto zamietne. GA4 Data API pritom vracia
- * spend, klikymi aj nazvy kampani cez merchantov existujuci OAuth — teda
- * ziadne dalsie schvalovanie a ziadny dalsi krok v onboardingu.
+ * WHY GA4 AND NOT THE ADS API:
+ * The Google Ads API requires a developer token, which Google takes weeks to
+ * months to approve and often rejects for new companies. The GA4 Data API
+ * returns spend, clicks and campaign names through the merchant's existing
+ * OAuth, so there is no extra approval and no extra onboarding step.
  *
- * CO TO NEVIE (a treba to hovorit nahlas):
- * GA4 NEDAVA stav conversion action v Google Ads. Nevieme teda povedat
- * "konverzna akcia je mrtva" tak, ako to vidi Ads UI. Vieme vsak nieco
- * prakticky rovnako uzitocne: kampan MINULA peniaze a priniesla kliky, ale
- * nemá ziadnu transakciu — a zaroven vieme zo Shopify, ci v tom case
- * objednavky realne chodili. To odlisi "kampan nepredava" (realny vysledok)
- * od "kampan predava, ale meranie to nevidi" (porucha, ktora stoji peniaze).
+ * WHAT IT CANNOT DO (and we say so openly):
+ * GA4 does NOT expose the status of a Google Ads conversion action, so we
+ * cannot say "the conversion action is dead" the way the Ads UI does. We can
+ * say something almost as useful: the campaign SPENT money and got clicks but
+ * has no transactions, while Shopify shows that orders were coming in at the
+ * same time. That separates "the campaign does not sell" (a real result) from
+ * "the campaign sells but tracking does not see it" (a costly failure).
  *
- * Overene 31.8.2026 na zivej property: dimenzie sessionGoogleAdsCampaignName,
- * sessionGoogleAdsAccountName a metriky advertiserAdCost, advertiserAdClicks
- * su v /metadata dostupne a v runReport kombinovatelne s transactions.
+ * The dimensions sessionGoogleAdsCampaignName, sessionGoogleAdsAccountName and
+ * the metrics advertiserAdCost, advertiserAdClicks are available in /metadata
+ * and can be combined with transactions in runReport.
  */
 
 const API = "https://analyticsdata.googleapis.com/v1beta";
 
-/** Kampan, ktora minula aspon tolko, aby mal nalez zmysel. */
+/** Minimum campaign spend for a finding to be meaningful. */
 const MIN_SPEND = Number(process.env.TRACKGAP_ADS_MIN_SPEND ?? 1);
 
 async function runReport(token, propertyId, body) {
@@ -39,12 +39,12 @@ async function runReport(token, propertyId, body) {
 }
 
 /**
- * Vykon Google Ads kampani za obdobie.
+ * Google Ads campaign performance for a period.
  *
- * Session-scoped dimenzie (sessionGoogleAds*) su tu spravna volba: zaujima
- * nas, ci navsteva Z TEJTO kampane viedla k transakcii. First-user scope by
- * priradzoval podla prveho kontaktu vobec a pri dlhsom rozhodovani by
- * ukazoval kampane, ktore s objednavkou nemaju nic spolocne.
+ * Session-scoped dimensions (sessionGoogleAds*) are the right choice here: we
+ * care whether a visit FROM THIS campaign led to a transaction. First-user
+ * scope would attribute by the very first touch and, with longer purchase
+ * decisions, would show campaigns unrelated to the order.
  */
 export async function fetchAdsCampaigns(token, propertyId, startDate, endDate) {
   const j = await runReport(token, propertyId, {
@@ -79,19 +79,19 @@ export async function fetchAdsCampaigns(token, propertyId, startDate, endDate) {
       roas: cost > 0 ? +(revenue / cost).toFixed(2) : null,
     };
   }).filter((r) =>
-    // "(not set)" a organicke riadky nie su Ads kampane
+    // "(not set)" and organic rows are not Ads campaigns
     r.campaign && r.campaign !== "(not set)" && r.campaign !== "(organic)");
 
   return { rows, quota: j.propertyQuota || null };
 }
 
 /**
- * Najde kampane, ktore platia a nemeraju.
+ * Finds campaigns that spend money but record no conversions.
  *
- * `ordersInPeriod` je pocet objednavok zo Shopify za to iste obdobie. Je to
- * dolezita poistka: ked obchod v tom case NIC nepredal, nulove konverzie su
- * spravny udaj a nie porucha merania. Bez tejto kontroly by appka strasila
- * kazdy obchod, ktory ma slaby tyzden.
+ * `ordersInPeriod` is the number of Shopify orders in the same period. It is
+ * an important safeguard: if the store sold NOTHING in that period, zero
+ * conversions is correct data, not a tracking failure. Without this check the
+ * app would alarm every store that has a slow week.
  */
 export function analyseAds(rows, ordersInPeriod = 0) {
   const spending = rows.filter((r) => r.cost >= MIN_SPEND);
@@ -101,8 +101,8 @@ export function analyseAds(rows, ordersInPeriod = 0) {
 
   const findings = [];
 
-  // 1) Kampan minula peniaze, ma kliky, ale ZIADNU transakciu — a obchod
-  //    pritom v tom obdobi predaval. To je typicky obraz rozbitej konverzie.
+  // 1) The campaign spent money and has clicks but NO transactions, while the
+  //    store was selling in that period. Typical sign of a broken conversion.
   const silent = spending.filter((r) => r.transactions === 0 && r.clicks > 0);
   const silentCost = +silent.reduce((s, r) => s + r.cost, 0).toFixed(2);
 
@@ -122,7 +122,7 @@ export function analyseAds(rows, ordersInPeriod = 0) {
         })),
         note: `${silent.length} Google Ads campaign(s) spent ${silentCost} and `
             + "sent paid clicks to your store, but GA4 attributes zero "
-            + `transactions to them — while your store did take `
+            + `transactions to them - while your store did take `
             + `${ordersInPeriod} orders in the same period. Either the "`
             + "conversion never gets measured for this traffic, or Google Ads "
             + "is optimising against data it does not have.",
@@ -130,8 +130,8 @@ export function analyseAds(rows, ordersInPeriod = 0) {
     });
   }
 
-  // 2) Cely ucet mina a nemeria nic. Samostatny, tvrdsi nalez: nejde
-  //    o jednu zle nastavenu kampan, ale o cele mrtve meranie Ads.
+  // 2) The whole account spends and tracks nothing. A separate, harsher
+  //    finding: not one misconfigured campaign, but dead Ads tracking overall.
   if (totalCost >= MIN_SPEND && totalTx === 0 && ordersInPeriod > 0) {
     findings.push({
       type: "ads_all_silent",
@@ -159,15 +159,15 @@ export function analyseAds(rows, ordersInPeriod = 0) {
       silent_campaigns: silent.length,
       wasted_spend: silentCost,
     },
-    // najdrahsie hore — tam je najviac penazi v hre
+    // most expensive first: that is where the most money is at stake
     campaigns: [...spending].sort((a, b) => b.cost - a.cost).slice(0, 50),
     findings,
   };
 }
 
 /**
- * GA4 nevie stav conversion action v Google Ads — hovorime to nahlas,
- * nech si merchant (ani my) nemysli, ze appka vidi viac, nez vidi.
+ * GA4 does not expose Google Ads conversion action status. State it openly so
+ * that neither the merchant nor we assume the app sees more than it does.
  */
 export const LIMITATIONS = [
   "GA4 does not expose the status of Google Ads conversion actions. "

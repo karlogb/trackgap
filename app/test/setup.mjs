@@ -1,8 +1,8 @@
 /**
- * Spolocne nastavenie pre `node --test`.
+ * Shared setup for `node --test`.
  *
- * Testy nesmu siahat na realne tajomstva: TRACKGAP_SECRETS ukazuje na
- * neexistujuci adresar a Shopify/Google config sa poskladá z dummy env.
+ * Tests must not touch real secrets: TRACKGAP_SECRETS points to a
+ * non-existent directory and the Shopify/Google config is built from dummy env.
  */
 import os from "node:os";
 import path from "node:path";

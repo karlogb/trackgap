@@ -1,15 +1,16 @@
 /**
- * TrackGap — overenie session tokenu (Shopify App Bridge).
+ * TrackGap - session token verification (Shopify App Bridge).
  *
- * PRECO: pred touto opravou kazdy endpoint veril holemu `?shop=` parametru.
- * Ktokolvek, kto poznal .myshopify.com domenu obchodu, si mohol cez
- * /backfill/setup prepisat Measurement ID a presmerovat cudzie konverzie do
- * vlastnej GA4 property. Overene 31.8.2026 jednym curl prikazom.
+ * WHY: before this, every endpoint trusted a bare `?shop=` parameter. Anyone
+ * who knew a store's .myshopify.com domain could use /backfill/setup to
+ * overwrite the Measurement ID and redirect that store's conversions into
+ * their own GA4 property.
  *
- * Shopify embedded appky posielaju pri kazdom volani JWT (session token),
- * podpisany client secretom. Domenu obchodu berieme Z TOKENU, nikdy z URL.
+ * Shopify embedded apps send a JWT (session token) with every call, signed
+ * with the client secret. The store domain is taken FROM THE TOKEN, never
+ * from the URL.
  *
- * Je to zaroven tvrda poziadavka App Store review — testuju to.
+ * This is also a hard App Store review requirement.
  */
 import crypto from "node:crypto";
 import { config } from "./shopify.mjs";
@@ -17,8 +18,8 @@ import { config } from "./shopify.mjs";
 const b64u = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
 /**
- * Overi JWT a vrati domenu obchodu, alebo null.
- * Kontroluje podpis, expiraciu, aud (nasa appka) aj dest (domena obchodu).
+ * Verifies the JWT and returns the store domain, or null.
+ * Checks the signature, expiry, aud (our app) and dest (store domain).
  */
 export function verifySessionToken(token) {
   if (!token || typeof token !== "string") return null;
@@ -27,7 +28,7 @@ export function verifySessionToken(token) {
 
   const [head, payload, sig] = parts;
 
-  // podpis — HS256 client secretom
+  // signature: HS256 with the client secret
   const expected = crypto
     .createHmac("sha256", config.client_secret)
     .update(`${head}.${payload}`)
@@ -49,14 +50,14 @@ export function verifySessionToken(token) {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  // 10 s tolerancia na rozdiel hodin medzi Shopify a nami
+  // 10 s tolerance for clock skew between Shopify and us
   if (typeof claims.exp !== "number" || claims.exp < now - 10) return null;
   if (typeof claims.nbf === "number" && claims.nbf > now + 10) return null;
 
-  // token musi byt vystaveny PRE NASU appku
+  // the token must be issued FOR OUR app
   if (claims.aud !== config.client_id) return null;
 
-  // dest je domena obchodu: https://xyz.myshopify.com
+  // dest is the store domain: https://xyz.myshopify.com
   const dest = String(claims.dest || "");
   const m = dest.match(/^https:\/\/([a-z0-9][a-z0-9-]*\.myshopify\.com)$/i);
   if (!m) return null;
@@ -65,14 +66,14 @@ export function verifySessionToken(token) {
 }
 
 /**
- * Domena obchodu pre tuto poziadavku — JEDINY dovreryhodny zdroj.
+ * Store domain for this request: the ONLY trusted source.
  *
- * Poradie:
+ * Order:
  *  1. Authorization: Bearer <session token>   (embedded UI)
- *  2. ?id_token=...                            (prvy load pred App Bridge)
+ *  2. ?id_token=...                            (first load before App Bridge)
  *
- * `?shop=` sa NEPOUZIVA na autorizaciu. Sluzi uz len na to, aby appka vedela,
- * ktoremu obchodu ponuknut instalaciu.
+ * `?shop=` is NOT used for authorization. It only tells the app which store
+ * to offer installation to.
  */
 export function authenticatedShop(req, url) {
   const hdr = req.headers.authorization || "";
@@ -89,12 +90,12 @@ export function authenticatedShop(req, url) {
 }
 
 /**
- * Rovnaka logika ako `authenticatedShop()`, ale vracia SAMOTNY overeny token,
- * nie domenu. Potrebuje ho token exchange, ktory ten JWT posiela Shopify ako
- * `subject_token`.
+ * Same logic as `authenticatedShop()`, but returns the verified token itself,
+ * not the domain. Token exchange needs it, since it sends that JWT to Shopify
+ * as `subject_token`.
  *
- * Vraciame len token, ktory presiel `verifySessionToken()` — neoverene JWT sa
- * Shopify posielat nesmie.
+ * Only tokens that passed `verifySessionToken()` are returned; an unverified
+ * JWT must never be sent to Shopify.
  */
 export function sessionTokenFrom(req, url) {
   const hdr = req.headers.authorization || "";
@@ -108,14 +109,14 @@ export function sessionTokenFrom(req, url) {
 }
 
 /**
- * Vyvojarska poistka: ak je TRACKGAP_DEV_SHOP nastavene, povolime volania bez
- * tokenu pre TENTO JEDEN obchod. Sluzi na lokalne testovanie cez curl.
- * V produkcii premenna nie je nastavena a nic sa neobchadza.
+ * Developer escape hatch: if TRACKGAP_DEV_SHOP is set, calls without a token
+ * are allowed for THIS ONE store. Used for local testing with curl.
+ * In production the variable is not set and nothing is bypassed.
  */
 export function devShopOverride(url) {
-  // Tvrda poistka: v produkcii sa tato cesta NESMIE dat zapnut ani omylom
-  // nastavenou premennou. Je to jediny sposob, ako obist session token,
-  // takze nesmie zavisiet len na tom, ze premenna "nie je nastavena".
+  // Hard guard: in production this path must NOT be enabled, not even by an
+  // accidentally set variable. It is the only way to bypass the session
+  // token, so it must not rely solely on the variable "not being set".
   if (process.env.NODE_ENV === "production") return null;
   const dev = process.env.TRACKGAP_DEV_SHOP;
   if (!dev) return null;

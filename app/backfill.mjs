@@ -1,32 +1,33 @@
 /**
- * TrackGap — GA4 Measurement Protocol.
+ * TrackGap - GA4 Measurement Protocol.
  *
- * Doplna konverzie, ktore do GA4 nedorazili. Overene 31.8.2026 v Google docs:
+ * Backfills conversions that never reached GA4. Based on Google's docs:
  *
- * - client_id je POVINNY. MP vracia 2xx aj ked event zahodi a nevracia error
- *   kod. Preto sa bez client_id NEPOSIELA NIC — inak by sme tvrdili, ze sme
- *   doplnili nieco, co sa stratilo.
- * - Session attribution funguje len ak event pride do 24 h od startu session
- *   a posle sa session_id. Preto near-real-time cez webhook, nie denny batch.
- * - Posielat konverziu za pouzivatela, ktory ODMIETOL suhlas, je porusenie
- *   Google policy aj GDPR. Bez suhlasu nedoplnujeme.
+ * - client_id is REQUIRED. MP returns 2xx even when it drops an event and
+ *   returns no error code. So without a client_id NOTHING is sent; otherwise
+ *   we would claim to have recovered something that was actually lost.
+ * - Session attribution only works if the event arrives within 24 h of the
+ *   session start and includes session_id. Hence near-real-time via webhook,
+ *   not a daily batch.
+ * - Sending a conversion for a user who DECLINED consent violates Google
+ *   policy and GDPR. No consent, no backfill.
  */
 import { db, decrypt } from "./db.mjs";
 
 const MP_URL = "https://www.google-analytics.com/mp/collect";
 const DEBUG_URL = "https://www.google-analytics.com/debug/mp/collect";
 
-/** Okno, v ktorom ma zmysel doplnat (session attribution). */
+/** Window in which backfilling makes sense (session attribution). */
 const SESSION_WINDOW_H = 24;
 
 export function canBackfill(order, identity) {
   if (!identity?.ga_client_id) {
     return { ok: false, reason: "no_client_id",
-      note: "No GA4 client ID — there is nobody to attribute this conversion "
+      note: "No GA4 client ID - there is nobody to attribute this conversion "
           + "to. Sending it anyway would corrupt your attribution." };
   }
-  // Suhlas: pixel uklada "granted" | "denied" | "unknown".
-  // `consent_denied` je stary tvar, ktory nikto nikdy nenastavil (audit, bod 5).
+  // Consent: the pixel stores "granted" | "denied" | "unknown".
+  // `consent_denied` is a legacy shape that was never actually set.
   const consent = identity.consent || (identity.consent_denied ? "denied" : null);
   if (consent === "denied") {
     return { ok: false, reason: "consent_denied",
@@ -34,8 +35,8 @@ export function canBackfill(order, identity) {
           + "breach GDPR and Google's terms." };
   }
   if (consent !== "granted") {
-    // Radsej nedoplnit, nez doplnit bez preukazatelneho suhlasu. Objednavka
-    // zostane v reporte s dovodom, aby merchant videl, kolko mu takto unika.
+    // Better not to backfill than to backfill without provable consent. The
+    // order stays in the report with a reason so the merchant sees the loss.
     return { ok: false, reason: "consent_unknown",
       note: "We cannot prove the visitor consented. Without that, we do not "
           + "send the conversion." };
@@ -43,7 +44,7 @@ export function canBackfill(order, identity) {
   const ageH = (Date.now() - new Date(order.created_at).getTime()) / 3600_000;
   if (ageH > SESSION_WINDOW_H) {
     return { ok: false, reason: "session_expired",
-      note: `Order is ${ageH.toFixed(0)} h. Po 24 h sa už event `
+      note: `Order is ${ageH.toFixed(0)} h old. After 24 h the event `
           + "no longer matches the original visit and would be attributed as direct." };
   }
   return { ok: true };
@@ -65,7 +66,7 @@ function buildPayload(order, identity) {
       currency: order.currency || "EUR",
       shipping: Number(order.shipping || 0),
       tax: Number(order.tax || 0),
-      // bez session_id sa event nespari s povodnou navstevou
+      // without session_id the event is not matched to the original visit
       ...(identity.ga_session_id ? { session_id: identity.ga_session_id } : {}),
       engagement_time_msec: 1,
       items: items.length ? items : undefined,
@@ -75,13 +76,13 @@ function buildPayload(order, identity) {
   return {
     client_id: identity.ga_client_id,
     ...(identity.user_id ? { user_id: identity.user_id } : {}),
-    // timestamp objednavky, aby event sedel do spravnej session
+    // order timestamp, so the event lands in the right session
     timestamp_micros: new Date(order.created_at).getTime() * 1000,
     non_personalized_ads: false,
-    // Suhlas hlasime podla toho, co realne zachytil pixel — NIE natvrdo
-    // GRANTED (audit, bod 5). Objednavky s "denied" sa sem vobec nedostanu,
-    // canBackfill() ich odmietne skor; "unknown" hlasime konzervativne ako
-    // DENIED pre personalizaciu.
+    // Consent is reported based on what the pixel actually captured, NOT a
+    // hard-coded GRANTED. Orders with "denied" never get here, canBackfill()
+    // rejects them earlier; "unknown" is conservatively reported as DENIED
+    // for personalisation.
     consent: {
       ad_user_data: identity?.consent === "granted" ? "GRANTED" : "DENIED",
       ad_personalization: identity?.consent === "granted" ? "GRANTED" : "DENIED",
@@ -91,8 +92,8 @@ function buildPayload(order, identity) {
 }
 
 /**
- * Validacia cez debug endpoint. MP produkcny endpoint nevracia chyby,
- * takze bez tohoto by sme netusili, ci payload sedi.
+ * Validation via the debug endpoint. The production MP endpoint returns no
+ * errors, so without this we would not know whether the payload is valid.
  */
 export async function validate(measurementId, apiSecret, order, identity) {
   const url = `${DEBUG_URL}?measurement_id=${encodeURIComponent(measurementId)}`
@@ -112,7 +113,7 @@ export async function sendPurchase(measurementId, apiSecret, order, identity) {
   const gate = canBackfill(order, identity);
   if (!gate.ok) return { sent: false, ...gate };
 
-  // najprv debug — produkcny endpoint chyby nehlasi
+  // debug first: the production endpoint does not report errors
   const v = await validate(measurementId, apiSecret, order, identity);
   if (!v.valid) {
     return { sent: false, reason: "invalid_payload", messages: v.messages };
@@ -124,35 +125,36 @@ export async function sendPurchase(measurementId, apiSecret, order, identity) {
     method: "POST",
     body: JSON.stringify(buildPayload(order, identity)),
   });
-  // MP vracia 204 aj pri zahodenom evente — preto sa uspech NETVRDI len z kodu
+  // MP returns 204 even for a dropped event, so success is NOT inferred from the status code alone
   return { sent: r.status === 204 || r.ok, status: r.status };
 }
 
-// Schema tychto tabuliek zije v db.mjs (jedno miesto pravdy).
-// Predtym boli definovane aj tu, takze vysledna schema zavisela
-// od poradia importov — audit 31.8.2026, bod 3.
+// The schema of these tables lives in db.mjs (single source of truth).
+// They used to be defined here as well, so the resulting schema depended
+// on import order.
 
 /**
- * Ulozi identitu z pixelu.
+ * Stores an identity from the pixel.
  *
- * `row` uz musi byt prejdene cez sanitizeIdentity() v server.mjs — plochy
- * objekt s overenymi polami. Cely raw payload sa uz NEUKLADA: bol to zbytocny
- * balast a zaroven ulozisko dat, ktore sme nikdy necitali (audit, bod 8).
+ * `row` must already have gone through sanitizeIdentity() in server.mjs: a
+ * flat object with validated fields. The full raw payload is NO LONGER
+ * stored; it was unnecessary ballast and data we never read.
  *
- * ZLUCUJE, NEPREPISUJE. Identita prichadza po kusoch a kazdy event vie nieco
- * ine: `page_viewed` prinesie `_ga` client_id, `checkout_completed` az token
- * a order_id. Povodne `INSERT OR REPLACE` prepisalo skor ulozene client_id
- * hodnotou NULL, takze objednavka skoncila bez identity — presne to, co ma
- * appka riesit (overene na zivom obchode 1.9.2026).
+ * MERGES, DOES NOT OVERWRITE. Identity arrives in pieces and each event knows
+ * something different: `page_viewed` brings the `_ga` client_id,
+ * `checkout_completed` brings the token and order_id. The original
+ * `INSERT OR REPLACE` overwrote a previously stored client_id with NULL, so
+ * the order ended up without an identity, which is exactly what the app is
+ * meant to solve.
  */
 export function saveIdentity(shopId, row) {
-  const id = row.identity || row;      // znasa aj stary tvar
+  const id = row.identity || row;      // also accepts the legacy shape
   const sfcid = row.shopify_client_id || id.shopify_client_id || null;
   const token = row.checkout_token || null;
   const orderId = row.order_id || id.order_id || null;
 
-  // Chyba nam client_id, ale pozname Shopify clientId? Dotiahni ho zo
-  // skorsieho zaznamu tej istej navstevy — inak je konverzia nepriraditelna.
+  // Missing client_id but we know the Shopify clientId? Pull it from an
+  // earlier record of the same visit; otherwise the conversion is unattributable.
   let gaClientId = id.ga_client_id || null;
   let gaSessionId = id.ga_session_id || null;
   if (sfcid && (!gaClientId || !gaSessionId)) {
@@ -165,8 +167,8 @@ export function saveIdentity(shopId, row) {
     gaSessionId = gaSessionId || prev?.ga_session_id || null;
   }
 
-  // Bez checkout_tokenu nemame kluc na zlucenie (PK je shop_id+token a NULL
-  // sa v SQLite nikdy nerovna NULL). Taky zaznam je len "pixel bezi" stopa.
+  // Without a checkout_token there is no merge key (PK is shop_id+token and
+  // NULL never equals NULL in SQLite). Such a record only marks "pixel is running".
   if (!token) {
     db.prepare(`INSERT INTO identities
       (shop_id,checkout_token,order_id,ga_client_id,ga_session_id,gclid,fbclid,
@@ -195,7 +197,7 @@ export function saveIdentity(shopId, row) {
 }
 
 export function identityForOrder(shopId, orderId, checkoutToken, noteAttrs) {
-  // 1) note_attributes z objednavky — najspolahlivejsie
+  // 1) note_attributes from the order: the most reliable
   if (noteAttrs) {
     const get = (k) => noteAttrs.find?.((a) => a.name === k)?.value;
     const cid = get("__tg_cid");
@@ -218,23 +220,23 @@ export function identityForOrder(shopId, orderId, checkoutToken, noteAttrs) {
       };
     }
   }
-  // 2) z pixelu podla checkout_token
+  // 2) from the pixel by checkout_token
   const byToken = checkoutToken && db.prepare(
     "SELECT * FROM identities WHERE shop_id=? AND checkout_token=?",
   ).get(shopId, checkoutToken);
   if (byToken?.ga_client_id) return { ...byToken, source: "pixel_token" };
 
-  // 3) podla order_id
+  // 3) by order_id
   const byOrder = db.prepare(
     "SELECT * FROM identities WHERE shop_id=? AND order_id=?",
   ).get(shopId, String(orderId));
   if (byOrder?.ga_client_id) return { ...byOrder, source: "pixel_order" };
 
-  // 4) cez Shopify clientId — ta ista navsteva, iny event.
-  //    Zaznam objednavky moze mat token aj order_id, ale ziadne `_ga`
-  //    client_id (checkout bezi na inej domene a cookie tam neprecitame).
-  //    Client_id sme videli skor pri `page_viewed` v tej istej navsteve;
-  //    `clientId` zo Shopify je jediny kluc, ktory ich spaja.
+  // 4) via Shopify clientId: same visit, different event.
+  //    The order record may have a token and order_id but no `_ga`
+  //    client_id (checkout runs on another domain where we cannot read the
+  //    cookie). The client_id was seen earlier on `page_viewed` in the same
+  //    visit; the Shopify `clientId` is the only key linking them.
   const anchor = byToken || byOrder;
   if (anchor?.shopify_client_id) {
     const byVisit = db.prepare(
@@ -244,7 +246,7 @@ export function identityForOrder(shopId, orderId, checkoutToken, noteAttrs) {
     if (byVisit?.ga_client_id) {
       return {
         ...byVisit,
-        // suhlas patri k objednavke, nie k skorsiemu zobrazeniu stranky
+        // consent belongs to the order, not to an earlier page view
         consent: anchor.consent || byVisit.consent || null,
         source: "pixel_visit",
       };

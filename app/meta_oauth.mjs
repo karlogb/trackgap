@@ -1,13 +1,13 @@
 /**
- * TrackGap — Meta OAuth (Facebook Login for Business).
+ * TrackGap - Meta OAuth (Facebook Login for Business).
  *
- * Doplnok k token-based pripojeniu v meta.mjs. Merchant klikne "Connect",
- * prihlasi sa a odsuhlasi pristup — ziadne kopirovanie tokenov.
+ * Complements the token-based connection in meta.mjs. The merchant clicks
+ * "Connect", logs in and grants access; no copying of tokens.
  *
- * STAV (31.8.2026): v Development mode funguje na uctoch, kde ma pouzivatel
- * rolu na nasej Meta appke (Admin/Developer/Tester). Pre cudzich merchantov
- * treba Advanced Access -> Business Verification + App Review so screencastom.
- * Preto v UI ponukame OBE cesty a token ostava plne funkcny fallback.
+ * STATUS: in Development mode it works for accounts whose user has a role on
+ * our Meta app (Admin/Developer/Tester). Other merchants require Advanced
+ * Access -> Business Verification + App Review with a screencast. That is why
+ * the UI offers BOTH paths and the token remains a fully working fallback.
  */
 import crypto from "node:crypto";
 import { db, encrypt, decrypt } from "./db.mjs";
@@ -16,8 +16,8 @@ import { readSecret } from "./secrets.mjs";
 const GRAPH = "https://graph.facebook.com/v21.0";
 const DIALOG = "https://www.facebook.com/v21.0/dialog/oauth";
 
-/** ads_read staci na citanie Insights. Nic viac nepytame — zbytocne
- *  permissions su dokumentovany dovod zamietnutia App Review. */
+/** ads_read is enough to read Insights. We ask for nothing more: unneeded
+ *  permissions are a documented App Review rejection reason. */
 const SCOPES = ["ads_read", "business_management"];
 
 export function metaAppConfig() {
@@ -57,8 +57,8 @@ export async function metaExchange(code, redirectUri) {
 }
 
 /**
- * Kratkodoby token (~1-2 h) vymeni za dlhodoby (~60 dni).
- * Bez toho by merchantovi pripojenie prestalo fungovat po hodine.
+ * Exchanges a short-lived token (~1-2 h) for a long-lived one (~60 days).
+ * Without this the merchant's connection would stop working after an hour.
  */
 export async function longLivedToken(shortToken) {
   const c = metaAppConfig();
@@ -74,7 +74,7 @@ export async function longLivedToken(shortToken) {
   return j;
 }
 
-/** Co token realne umoznuje — aby UI nehadalo. */
+/** What the token actually allows, so the UI does not have to guess. */
 export async function inspectToken(token) {
   const c = metaAppConfig();
   const appToken = c ? `${c.app_id}|${c.app_secret}` : token;
@@ -103,9 +103,9 @@ CREATE TABLE IF NOT EXISTS meta_oauth (
 );
 `);
 
-// Starsie DB tento stlpec nemaju. MUSI sa doplnit PRED vytvorenim indexu —
-// inak `CREATE INDEX` na existujucej tabulke padne na "no such column".
-try { db.exec("ALTER TABLE meta_oauth ADD COLUMN fb_user_id TEXT"); } catch { /* uz je */ }
+// Older DBs do not have this column. It MUST be added BEFORE creating the
+// index; otherwise `CREATE INDEX` on an existing table fails with "no such column".
+try { db.exec("ALTER TABLE meta_oauth ADD COLUMN fb_user_id TEXT"); } catch { /* already exists */ }
 db.exec("CREATE INDEX IF NOT EXISTS idx_meta_oauth_user ON meta_oauth(fb_user_id)");
 
 export function saveOAuthToken(shopId, token, expiresIn, scopes, fbUserId = null) {
@@ -124,11 +124,11 @@ export function saveOAuthToken(shopId, token, expiresIn, scopes, fbUserId = null
 }
 
 /**
- * Odpoji LEN obchody, ktore pripojil dany Facebook pouzivatel.
+ * Disconnects ONLY the stores connected by the given Facebook user.
  *
- * Predtym sa mazalo `SELECT shop_id FROM meta_oauth` bez podmienky — jeden
- * clovek, ktory odobral appke pristup na Facebooku, odpojil Metu VSETKYM
- * merchantom. Audit 31.8.2026, bod 2.
+ * Previously this deleted `SELECT shop_id FROM meta_oauth` without a
+ * condition: one person revoking the app's access on Facebook disconnected
+ * Meta for ALL merchants.
  */
 export function disconnectByFbUser(fbUserId) {
   if (!fbUserId) return { disconnected: 0 };
@@ -139,12 +139,12 @@ export function disconnectByFbUser(fbUserId) {
     try {
       db.prepare("UPDATE meta_config SET token_enc = NULL WHERE shop_id = ?")
         .run(r.shop_id);
-    } catch { /* meta_config nemusi existovat */ }
+    } catch { /* meta_config may not exist */ }
   }
   return { disconnected: rows.length, shop_ids: rows.map((r) => r.shop_id) };
 }
 
-/** Kto (aky FB pouzivatel) pripojil tento obchod. */
+/** Who (which FB user) connected this store. */
 export function fbUserForShop(shopId) {
   const r = db.prepare("SELECT fb_user_id FROM meta_oauth WHERE shop_id = ?")
     .get(shopId);
@@ -154,7 +154,7 @@ export function fbUserForShop(shopId) {
 export function oauthToken(shopId) {
   const r = db.prepare("SELECT * FROM meta_oauth WHERE shop_id = ?").get(shopId);
   if (!r) return null;
-  // 7 dni pred expiraciou uz varujeme — merchant sa ma stihnut prepojit znova
+  // warn 7 days before expiry so the merchant has time to reconnect
   const expiring = r.expires_at
     && new Date(r.expires_at).getTime() - Date.now() < 7 * 86400_000;
   return {

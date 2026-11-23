@@ -1,38 +1,38 @@
 /**
- * TrackGap — tretia vrstva merania (vlastny web pixel).
+ * TrackGap - third measurement layer (our own web pixel).
  *
- * PRECO TO EXISTUJE:
- * Shopify vie, ze objednavka vznikla. GA4 vie, ze prisla (alebo neprisla).
- * Medzi tym je diera: ked objednavka v GA4 chyba, sam rozdiel NEPOVIE, ci
- *   (a) sa event vobec neodpalil v prehliadaci, alebo
- *   (b) odpalil sa, ale do GA4 nedorazil.
- * Su to dve uplne ine poruchy s inou opravou:
- *   (a) chyba v theme / consent banneri / GTM triggeri  -> merchant opravuje web
- *   (b) chyba v GA4 tagu, konfiguracii alebo blokovanie -> merchant opravuje meranie
+ * WHY THIS EXISTS:
+ * Shopify knows an order was created. GA4 knows whether it arrived. In
+ * between there is a gap: when an order is missing in GA4, the difference
+ * alone does NOT say whether
+ *   (a) the event never fired in the browser, or
+ *   (b) it fired but never reached GA4.
+ * These are two entirely different failures with different fixes:
+ *   (a) theme / consent banner / GTM trigger bug   -> merchant fixes the site
+ *   (b) GA4 tag, configuration or blocking issue -> merchant fixes tracking
  *
- * Nas pixel bezi v Shopify sandboxe, ktory merchant nevie omylom rozbit, a je
- * uplne nezavisly od GTM aj GA4. Ked od neho mame `purchase`, vieme s istotou,
- * ze konverzia prehliadac OPUSTILA. To je presne dokaz, ktory konkurencia
- * (Untracked: Conversion Monitor) ma tiez — ale my ho krizime s realnym GA4,
- * takze vieme ukazat, KDE presne sa retazec pretrhol.
+ * Our pixel runs in the Shopify sandbox, which the merchant cannot break by
+ * accident, and is fully independent of GTM and GA4. When it reports a
+ * `purchase`, we know for sure the conversion LEFT the browser. Cross-checked
+ * against real GA4 data, this shows exactly WHERE the chain broke.
  *
- * PCD Level 1: ukladame len checkout_token, order_id, sumu, menu, cas a stav
- * suhlasu. Ziadne meno, e-mail, adresa ani telefon.
+ * PCD Level 1: we store only checkout_token, order_id, amount, currency,
+ * time and consent state. No name, e-mail, address or phone.
  */
 import { db } from "./db.mjs";
 
 /**
- * Zapise udalost z pixelu.
+ * Records a pixel event.
  *
- * Idempotentne: pixel posiela `keepalive` fetch, ktory sa pri zatvarani karty
- * moze zopakovat, a `checkout_completed` sa da vyvolat aj obnovenim dakovnej
- * stranky. Bez toho by jedna objednavka vygenerovala niekolko riadkov a
- * vyzerala by ako duplicita, ktoru sme si sposobili sami.
+ * Idempotent: the pixel sends a `keepalive` fetch that may repeat when the
+ * tab closes, and `checkout_completed` can also fire on a thank-you page
+ * refresh. Without this one order would generate several rows and look like
+ * a self-inflicted duplicate.
  */
 export function recordPixelEvent(shopId, ev) {
   const token = ev.checkout_token || null;
   const orderId = ev.order_id ? String(ev.order_id) : null;
-  if (!token && !orderId) return false;      // niet co zakotvit
+  if (!token && !orderId) return false;      // nothing to anchor
 
   db.prepare(`
     INSERT INTO pixel_events
@@ -51,14 +51,14 @@ export function recordPixelEvent(shopId, ev) {
 }
 
 /**
- * Doplni order_id k udalosti, ktora prisla len s checkout_token.
+ * Fills in the order_id for an event that arrived with only a checkout_token.
  *
- * Vola sa z webhooku orders/create — to je jediny moment, kedy sa token a
- * cislo objednavky stretnu. Bez tohto kroku by pixel_events zostali navzdy
- * nesparovatelne s objednavkami a cela vrstva by bola k nicomu.
+ * Called from the orders/create webhook, the only moment where the token and
+ * the order number meet. Without this step pixel_events could never be
+ * matched to orders and the whole layer would be useless.
  *
- * Jedinecnost stoji na checkout_tokene, nie na order_id, takze doplnenie
- * order_id nikdy nemoze sposobit konflikt.
+ * Uniqueness is based on checkout_token, not order_id, so filling in the
+ * order_id can never cause a conflict.
  */
 export function linkOrderToPixel(shopId, checkoutToken, orderId) {
   if (!checkoutToken || !orderId) return 0;
@@ -69,12 +69,13 @@ export function linkOrderToPixel(shopId, checkoutToken, orderId) {
 }
 
 /**
- * Odkedy pixel realne posiela.
+ * Since when the pixel has actually been sending.
  *
- * KRITICKE PRE POCTIVOST VYSLEDKU: objednavky spred instalacie appky pixel
- * nikdy nevidel. Bez tejto hranice by sme ich vsetky oznacili za "event sa
- * neodpalil" a merchantovi by sme nahlasili poruchu, ktora neexistuje.
- * Vsetko starsie ide do kategorie "before_pixel" a do zaverov sa neratá.
+ * CRITICAL FOR AN HONEST RESULT: the pixel never saw orders placed before the
+ * app was installed. Without this boundary we would mark all of them as
+ * "event never fired" and report a failure that does not exist.
+ * Everything older goes into the "before_pixel" category and is excluded
+ * from conclusions.
  */
 export function pixelActiveSince(shopId) {
   const r = db.prepare(
@@ -83,7 +84,7 @@ export function pixelActiveSince(shopId) {
   return r?.first_seen || null;
 }
 
-/** Mnozina order_id, pre ktore mame od pixelu potvrdeny purchase. */
+/** Set of order_ids for which the pixel confirmed a purchase. */
 export function purchasedOrderIds(shopId) {
   const rows = db.prepare(
     `SELECT DISTINCT order_id FROM pixel_events
@@ -92,7 +93,7 @@ export function purchasedOrderIds(shopId) {
   return new Set(rows.map((r) => String(r.order_id)));
 }
 
-/** Prehlad pre dashboard aj onboarding: bezi pixel vobec? */
+/** Summary for the dashboard and onboarding: is the pixel running at all? */
 export function pixelHealth(shopId) {
   const row = db.prepare(`
     SELECT

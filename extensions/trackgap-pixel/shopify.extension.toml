@@ -1,11 +1,11 @@
 # TrackGap web pixel extension.
 #
-# Bezi na storefronte aj v checkoute, v izolovanom sandboxe. Merchant ho
-# needituje ani neinstaluje — Shopify ho aktivuje pri instalacii appky.
+# Runs on the storefront and in checkout, in an isolated sandbox. The merchant
+# neither edits nor installs it; Shopify activates it when the app is installed.
 #
-# Ucel: precitat GA4 client_id z _ga cookie a reklamne click ID z URL, aby sa
-# doplnena konverzia priradila k spravnej navsteve. Bez toho by skoncila ako
-# direct/none, co je horsie nez ked chyba.
+# Purpose: read the GA4 client_id from the _ga cookie and ad click IDs from the
+# URL so a backfilled conversion is attributed to the right visit. Without it
+# the conversion would end up as direct/none, which is worse than missing.
 
 api_version = "2026-07"
 
@@ -17,8 +17,8 @@ type = "web_pixel_extension"
 runtime_context = "strict"
 
 [extensions.customer_privacy]
-# Bez suhlasu pixel nebezi — Shopify to vynucuje cez Customer Privacy API.
-# Preto v UI hlasime "nedalo sa doplnit: zakaznik odmietol suhlas".
+# Without consent the pixel does not run; Shopify enforces this via the
+# Customer Privacy API. Hence the UI reports "could not backfill: customer declined consent".
 analytics = true
 marketing = true
 preferences = false

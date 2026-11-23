@@ -1,44 +1,45 @@
 /**
- * TrackGap — overenie, ci sa na adresu pre alerty DA vobec dorucit.
+ * TrackGap - checks whether the alert address CAN receive mail at all.
  *
- * PRECO TO VZNIKLO (1.9.2026, najdene v schranke):
- * Merchant zadal adresu, `/alerts/setup` ju vzal (staci mu regex `nieco@nieco.tld`),
- * Proton Bridge spravu PREVZAL a UI napisalo "Saved — check your inbox".
- * Onboarding krok dostal zelenu fajku. O hodinu a pol prisiel bounce:
+ * WHY THIS EXISTS:
+ * A merchant entered an address, `/alerts/setup` accepted it (a
+ * `something@something.tld` regex is enough), Proton Bridge ACCEPTED the
+ * message and the UI said "Saved - check your inbox". The onboarding step got
+ * a green check mark. An hour and a half later a bounce arrived:
  *
  *   <app-review@example.com>: Domain example.com does not accept mail (nullMX)
  *
- * Bounce prisiel NAM, nie merchantovi. Z pohladu appky bolo vsetko v poriadku:
- * onboarding dokonceny, alerty "nastavene". Pritom sa na tu adresu nikdy nic
- * nedoruci.
+ * The bounce came to US, not to the merchant. From the app's point of view
+ * everything was fine: onboarding complete, alerts "set up". Yet nothing
+ * would ever be delivered to that address.
  *
- * To je ta ista trieda poruchy, ktoru appka riesi u merchanta — tichy vypadok
- * merania — len o poschodie vyssie: TrackGap by ticho prestal byt schopny
- * ozvat sa. A ozvat sa je cely produkt. Dashboard, na ktory sa nikto nepozera,
- * problem nevyriesi (alerts.mjs, prvy komentar).
+ * This is the same class of failure the app detects for merchants (a silent
+ * tracking outage), one level up: TrackGap would silently lose the ability
+ * to speak up, and speaking up is the whole product. A dashboard nobody looks
+ * at does not solve the problem (see alerts.mjs).
  *
- * SMTP sa nesnazime robit sami (RCPT TO probe): vacsina serverov dnes prijme
- * vsetko a odmietne az po prevzati, takze by to dalo falosnu istotu. DNS ale
- * odpovie pravdivo na to jedine, co sa da overit dopredu: ci domena vobec
- * PRIJIMA postu.
+ * We do not attempt SMTP ourselves (RCPT TO probe): most servers today accept
+ * everything and reject only after acceptance, so it would give false
+ * confidence. DNS, however, truthfully answers the one thing that can be
+ * checked upfront: whether the domain ACCEPTS mail at all.
  */
 import dns from "node:dns/promises";
 
-/** Syntax. Zamerne volnejsia nez realita — tvrde parsovanie RFC 5322 by
- *  odmietlo platne adresy, a od syntaxe si tu uz nic nesubujeme. */
+/** Syntax. Deliberately looser than reality: strict RFC 5322 parsing would
+ *  reject valid addresses, and we expect nothing more from syntax here. */
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 /**
- * Zisti, ci domena prijima postu.
+ * Determines whether a domain accepts mail.
  *
- * Vracia:
- *   { ok: true }                      — ma MX alebo aspon A/AAAA (implicitne MX)
- *   { ok: false, reason, detail }     — domena postu neprijima
- *   { ok: true, unknown: true }       — DNS zlyhalo z inych dovodov
+ * Returns:
+ *   { ok: true }                      - has MX or at least A/AAAA (implicit MX)
+ *   { ok: false, reason, detail }     - the domain does not accept mail
+ *   { ok: true, unknown: true }       - DNS failed for other reasons
  *
- * POSLEDNY PRIPAD JE ZAMERNE `ok`: vypadok DNS na NASEJ strane nesmie
- * merchantovi zablokovat nastavenie alertov. Radsej prijmeme adresu, ktoru
- * sme nevedeli overit, nez by sme odmietli platnu.
+ * THE LAST CASE IS DELIBERATELY `ok`: a DNS outage on OUR side must not block
+ * the merchant from setting up alerts. Better to accept an address we could
+ * not verify than to reject a valid one.
  */
 export async function checkMailDomain(email, { timeoutMs = 5000 } = {}) {
   if (!EMAIL_RE.test(email || "")) {
@@ -55,8 +56,8 @@ export async function checkMailDomain(email, { timeoutMs = 5000 } = {}) {
     const mx = await withTimeout(dns.resolveMx(domain));
     const usable = (mx || []).filter((r) => r.exchange && r.exchange !== ".");
     if (mx && mx.length && !usable.length) {
-      // nullMX (RFC 7505): domena VYSLOVNE hlasi, ze postu neprijima.
-      // Presne tento pripad nas dostal — example.com.
+      // nullMX (RFC 7505): the domain EXPLICITLY states it accepts no mail.
+      // This is exactly the example.com case.
       return {
         ok: false,
         reason: "null_mx",
@@ -66,15 +67,15 @@ export async function checkMailDomain(email, { timeoutMs = 5000 } = {}) {
     if (usable.length) return { ok: true, mx: usable[0].exchange };
   } catch (e) {
     if (e.code === "ENOTFOUND" || e.code === "ENODATA") {
-      // Ziadne MX este neznamena nic — RFC 5321 dovoluje dorucovat na A zaznam.
+      // No MX means nothing yet: RFC 5321 allows delivery to the A record.
       try {
         const a = await withTimeout(dns.resolve4(domain));
         if (a?.length) return { ok: true, mx: null };
-      } catch { /* skusime este AAAA */ }
+      } catch { /* try AAAA as well */ }
       try {
         const a6 = await withTimeout(dns.resolve6(domain));
         if (a6?.length) return { ok: true, mx: null };
-      } catch { /* padneme nizsie */ }
+      } catch { /* fall through below */ }
       if (e.code === "ENOTFOUND") {
         return {
           ok: false,

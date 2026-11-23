@@ -1,17 +1,18 @@
 /**
- * TrackGap — Shopify web pixel extension.
+ * TrackGap - Shopify web pixel extension.
  *
- * Bezi v strict sandboxe (web worker): ziadny DOM, ziadny document.cookie.
- * Shopify vsak poskytuje browser.cookie.get() — oficialne API, ktore
- * "replaces the native document.cookie API" a vykonava sa v top frame.
+ * Runs in a strict sandbox (web worker): no DOM, no document.cookie.
+ * Shopify does provide browser.cookie.get(), an official API that
+ * "replaces the native document.cookie API" and runs in the top frame.
  *
- * PRECO TO EXISTUJE: server-side doplnenie konverzie do GA4 potrebuje
- * client_id z _ga cookie. Shopify Admin API ho nema. Bez neho by sa doplnena
- * konverzia priradila nespravne a merchantovi by to pokazilo atribuciu —
- * co je horsie, nez ked konverzia chyba.
+ * WHY THIS EXISTS: server-side GA4 conversion backfill needs the client_id
+ * from the _ga cookie. The Shopify Admin API does not have it. Without it a
+ * backfilled conversion would be misattributed and break the merchant's
+ * attribution, which is worse than a missing conversion.
  *
- * Zapisuje do cart attributes, lebo tie sa pri checkoute prepisu do
- * order.note_attributes a pridu priamo vo webhooku orders/create.
+ * Writes into cart attributes, because those are copied into
+ * order.note_attributes at checkout and arrive directly in the
+ * orders/create webhook.
  */
 import { register } from "@shopify/web-pixels-extension";
 
@@ -19,7 +20,7 @@ register(({ analytics, browser, init, settings }) => {
   const ENDPOINT = settings.endpoint || "https://trackgap.example.com/pixel/event";
   const shop = init?.data?.shop?.myshopifyDomain || "";
 
-  /** client_id z _ga cookie. Format: GA1.1.<client_id>.<timestamp> */
+  /** client_id from the _ga cookie. Format: GA1.1.<client_id>.<timestamp> */
   async function gaClientId() {
     try {
       const raw = await browser.cookie.get("_ga");
@@ -32,29 +33,30 @@ register(({ analytics, browser, init, settings }) => {
   }
 
   /**
-   * GA4 session_id z cookie `_ga_<MEASUREMENT_ID>`.
+   * GA4 session_id from the `_ga_<MEASUREMENT_ID>` cookie.
    *
-   * Format sa lisi podla verzie GA4:
+   * The format differs between GA4 versions:
    *   GS1.1.1788178526.2.1.1788178600.0.0.0
    *   GS2.1.s1788178526$o2$g1$t1788178600$j60$l0$h0
-   * Preto sa timestamp hlada tolerantne, nie fixnou poziciou.
+   * So the timestamp is located tolerantly, not by a fixed position.
    *
-   * DOLEZITE: Measurement ID je len skratka. Ked ho merchant nezadal (alebo
-   * zadal ine, nez ma obchod nasadene), skusame vsetky `_ga_*` cookies —
-   * `client_id` z `_ga` mame tak ci tak a appka musi fungovat aj bez nastavenia
-   * GA4 v UI. Bez tohto fallbacku by novy merchant nedostal nic.
+   * IMPORTANT: the Measurement ID is only a shortcut. If the merchant has not
+   * entered it (or entered a different one than the store uses), we try all
+   * `_ga_*` cookies; the `client_id` from `_ga` is available anyway and the
+   * app must work without GA4 being configured in the UI. Without this
+   * fallback a new merchant would get nothing.
    */
   async function gaSessionId(measurementId) {
     const parse = (raw) => {
       if (!raw) return null;
       const s = String(raw);
-      let m = s.match(/[.$]s(\d{9,})/);      // novy format
+      let m = s.match(/[.$]s(\d{9,})/);      // new format
       if (m) return m[1];
-      m = s.match(/^GS\d\.\d\.(\d{9,})/);    // stary format
+      m = s.match(/^GS\d\.\d\.(\d{9,})/);    // old format
       return m ? m[1] : null;
     };
 
-    // 1) presna cookie podla nastaveneho Measurement ID
+    // 1) the exact cookie for the configured Measurement ID
     try {
       if (measurementId && measurementId !== "not-set") {
         const name = "_ga_" + String(measurementId).replace(/^G-/, "");
@@ -62,19 +64,19 @@ register(({ analytics, browser, init, settings }) => {
         if (parsed) return parsed;
       }
     } catch {
-      /* skusame dalej */
+      /* keep trying */
     }
 
-    // 2) Fallback: bezne pouzivane GA4 property na obchode nepoznáme a
-    //    `browser.cookie.get()` bez argumentu Shopify sandbox NEPODPORUJE
-    //    (zhodilo to cely handler — 31.8.2026). Bez Measurement ID teda
-    //    session_id nemame, ale to NIE JE kriticke: `client_id` z `_ga`
-    //    funguje vzdy a appka je pouzitelna aj bez nastavenia GA4 v UI.
-    //    Session_id len spresnuje priradenie ku konkretnej navsteve.
+    // 2) Fallback: we do not know which GA4 property the store uses, and
+    //    the Shopify sandbox does NOT support `browser.cookie.get()` without
+    //    an argument (it crashed the whole handler). So without a Measurement
+    //    ID there is no session_id, but that is NOT critical: the `client_id`
+    //    from `_ga` always works and the app is usable without GA4 configured
+    //    in the UI. session_id only refines attribution to a specific visit.
     return null;
   }
 
-  /** Reklamne identifikatory z URL. */
+  /** Ad identifiers from the URL. */
   function clickIds(ctx) {
     const url = ctx?.document?.location?.href || "";
     const out = {};
@@ -86,12 +88,12 @@ register(({ analytics, browser, init, settings }) => {
   }
 
   /**
-   * Skutocny stav suhlasu z Shopify Customer Privacy API.
+   * Actual consent state from the Shopify Customer Privacy API.
    *
-   * Predtym sa do GA4 posielalo natvrdo `GRANTED`, hoci sme realny stav nikdy
-   * nezistili — to je porusenie Google policy aj GDPR (audit, bod 5).
-   * Pixel sam sa v EU bez suhlasu nespusti, ale ked bezi, stav vieme precitat
-   * a ulozit, aby sa rozhodovalo podla neho a nie podla domnienky.
+   * Previously a hard-coded `GRANTED` was sent to GA4 although the real state
+   * was never checked, which violates Google policy and GDPR. In the EU the
+   * pixel does not run without consent at all, but when it runs we can read
+   * and store the state so decisions are based on it, not on assumptions.
    */
   function readConsent(ctx) {
     try {
@@ -123,11 +125,12 @@ register(({ analytics, browser, init, settings }) => {
   }
 
   /**
-   * Ulozi identitu do cart attributes. Odtial sa pri checkoute prepise
-   * do order.note_attributes a dorazi s webhookom.
+   * Stores the identity in cart attributes. From there it is copied into
+   * order.note_attributes at checkout and arrives with the webhook.
    *
-   * POZOR: pixel bezi v sandboxe (web worker), kde relativna URL neukazuje
-   * na domenu obchodu. Preto sa absolutna URL sklada z event kontextu.
+   * NOTE: the pixel runs in a sandbox (web worker) where a relative URL does
+   * not point to the store domain, so the absolute URL is built from the
+   * event context.
    */
   async function persistToCart(identity, ctx) {
     const attrs = {};
@@ -154,21 +157,21 @@ register(({ analytics, browser, init, settings }) => {
       });
       return true;
     } catch {
-      // cart update zlyhal — identitu aspon posleme na nas endpoint,
-      // odtial sa spari s objednavkou cez checkout_token
+      // cart update failed: at least send the identity to our endpoint,
+      // where it is matched to the order via checkout_token
       return false;
     }
   }
 
   /**
-   * Posle udalost na nas server. Nikdy neblokuje stranku.
+   * Sends an event to our server. Never blocks the page.
    *
-   * Posiela sa PRIAMO na nas endpoint (CORS je na serveri povoleny).
+   * Sent DIRECTLY to our endpoint (CORS is enabled on the server).
    *
-   * App Proxy (`/apps/trackgap/event`) je pripraveny na serveri aj v
-   * shopify.app.toml, ale pixel ho zatial nepouziva: proxy sa aktivuje az po
-   * preinstalovani appky a kym nie je aktivny, kazde volanie skoncilo 404 a
-   * meranie stichlo (31.8.2026). Prepneme az ked bude proxy overene zive.
+   * The App Proxy (`/apps/trackgap/event`) is ready on the server and in
+   * shopify.app.toml, but the pixel does not use it yet: the proxy only
+   * activates after the app is reinstalled, and until then every call ended
+   * in 404 and measurement went silent. Switch once the proxy is verified live.
    */
   function report(type, payload) {
     try {
@@ -179,14 +182,14 @@ register(({ analytics, browser, init, settings }) => {
         body: JSON.stringify({ shop, type, ts: Date.now(), ...payload }),
       });
     } catch {
-      /* ticho — meranie nikdy nesmie zhodit obchod */
+      /* silent: measurement must never break the store */
     }
   }
 
-  // --- zachytenie identity co najskor v ceste zakaznika ---
-  // Identitu hlasime aj na nas endpoint, nielen do cart attributes:
-  // (a) da sa tak overit, ze pixel realne bezi, bez cakania na objednavku,
-  // (b) ak cart update zlyha, mame zalozny zdroj sparovatelny cez checkout token.
+  // --- capture identity as early as possible in the customer journey ---
+  // Identity is also reported to our endpoint, not only to cart attributes:
+  // (a) it proves the pixel is actually running without waiting for an order,
+  // (b) if the cart update fails, there is a fallback matchable via checkout token.
   let reportedOnce = false;
 
   analytics.subscribe("page_viewed", async (event) => {
@@ -194,7 +197,7 @@ register(({ analytics, browser, init, settings }) => {
     if (!identity.ga_client_id && !identity.gclid && !identity.fbclid) return;
     await persistToCart(identity, event.context);
     if (!reportedOnce) {
-      reportedOnce = true;          // raz za nacitanie, nie pri kazdom pohybe
+      reportedOnce = true;          // once per load, not on every move
       report("identity", { identity, client_id_shopify: event.clientId || null });
     }
   });
@@ -210,9 +213,9 @@ register(({ analytics, browser, init, settings }) => {
   });
 
   /**
-   * Nezavisly dokaz, ze konverzia opustila prehliadac.
-   * Ak toto pride a GA4 transakciu nema, chyba je medzi prehliadacom a GA4.
-   * Ak nepride ani toto, event sa vobec neodpalil.
+   * Independent proof that the conversion left the browser.
+   * If this arrives and GA4 has no transaction, the problem is between the
+   * browser and GA4. If even this does not arrive, the event never fired.
    */
   analytics.subscribe("checkout_completed", async (event) => {
     const c = event.data?.checkout;
