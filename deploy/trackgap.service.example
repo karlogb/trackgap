@@ -1,0 +1,20 @@
+# Example systemd unit (user or system service).
+# Adjust paths, then: systemctl --user enable --now trackgap
+[Unit]
+Description=TrackGap Shopify app (loopback :9310, behind a reverse proxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/trackgap/app
+EnvironmentFile=/opt/trackgap/.env
+ExecStart=/usr/bin/node /opt/trackgap/app/server.mjs
+Restart=always
+RestartSec=5
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

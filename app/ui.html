@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TrackGap</title>
+<!-- App Bridge musi byt PRVY skript v <head> a nacitany z CDN, nie zbalený.
+     Dava nam session token, ktorym sa autorizuje kazde volanie na nas server. -->
+<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+<style>
+  :root{
+    --bg:#f1f2f4; --card:#fff; --ink:#1a1c1d; --dim:#6b7177; --line:#e3e5e7;
+    --hi:#d72c0d; --mid:#c9861a; --ok:#0a7d55; --info:#2563eb;
+    --grad1:#0f5c4a; --grad2:#1d8f8a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;
+       background:var(--bg);color:var(--ink)}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 70px}
+  header{display:flex;align-items:flex-start;justify-content:space-between;
+         gap:16px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:22px;margin:0 0 2px;font-weight:650}
+  h1 span{color:var(--dim);font-weight:400}
+  .lead{color:var(--dim);font-size:13px}
+  .seg{display:flex;gap:4px;background:#e7e9eb;border-radius:9px;padding:3px}
+  .seg button{background:none;border:0;padding:6px 13px;border-radius:7px;
+              font-size:13px;cursor:pointer;color:var(--dim)}
+  .seg button.on{background:#fff;color:var(--ink);font-weight:600;
+                 box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .grid{display:grid;grid-template-columns:1fr 380px;gap:14px;align-items:start}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:18px 20px;margin-bottom:14px}
+  .card h2{font-size:15px;margin:0 0 2px;font-weight:600}
+  .card .note{color:var(--dim);font-size:12px;margin:0 0 14px}
+
+  .hero{background:linear-gradient(135deg,var(--grad1),var(--grad2));
+        color:#fff;border:0;padding:22px 24px}
+  .hero.clean{background:linear-gradient(135deg,#0a5c3e,#12836a)}
+  .hero.bad{background:linear-gradient(135deg,#8c1d10,#c4381d)}
+  .pill{display:inline-block;background:#ffd23f;color:#3d2c00;font-size:11px;
+        font-weight:700;letter-spacing:.6px;padding:4px 10px;border-radius:20px;
+        text-transform:uppercase}
+  .hero h3{font-size:27px;margin:14px 0 6px;font-weight:650;line-height:1.2}
+  .hero p{margin:0;opacity:.9;font-size:13px}
+  .impact{background:rgba(255,255,255,.14);border-radius:10px;
+          padding:12px 14px;margin-top:16px}
+  .impact .l{font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.5px}
+  .impact .v{font-size:26px;font-weight:650;margin:2px 0}
+  .impact .s{font-size:12px;opacity:.85}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+  @media(max-width:700px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .l{color:var(--dim);font-size:12px}
+  .kpi .n{font-size:26px;font-weight:650;margin:4px 0 2px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px}
+  .tag.ok{background:#e3f5ec;color:var(--ok)}
+  .tag.hi{background:#fdeae7;color:var(--hi)}
+  .tag.mid{background:#fdf2e0;color:var(--mid)}
+  .tag.dim{background:#eef0f2;color:var(--dim)}
+  .tag.soon{background:#eef0f2;color:var(--dim);font-weight:500}
+
+  .health .row{display:flex;justify-content:space-between;padding:9px 0;
+               border-bottom:1px solid var(--line);font-size:13px}
+  .health .row:last-child{border:0}
+  .health .row span:first-child{color:var(--dim)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+  .dot.g{background:var(--ok)} .dot.r{background:var(--hi)} .dot.y{background:var(--mid)}
+
+  .f{border-left:3px solid var(--line);padding:11px 0 11px 14px;margin:14px 0}
+  .f.high{border-color:var(--hi)} .f.medium{border-color:var(--mid)}
+  .f.low{border-color:var(--dim)} .f.info{border-color:var(--info)}
+  .f h4{margin:0 0 4px;font-size:14px;font-weight:600}
+  .f p{margin:0;color:var(--dim);font-size:13px}
+  code{background:#f0f1f3;padding:2px 6px;border-radius:4px;font-size:12px}
+
+  button.act{background:#1a1c1d;color:#fff;border:0;border-radius:9px;
+             padding:10px 17px;font-size:14px;cursor:pointer;font-weight:500}
+  button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  button:disabled{opacity:.45;cursor:default}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);
+               border-radius:8px;font-size:13px;margin-bottom:8px;font-family:inherit}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{text-align:left;padding:8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  tr:last-child td{border:0}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{color:var(--dim);font-size:12px}
+  .hidden{display:none}
+  /* Strata pristupu: appka prestala vidiet do dat. Zamerne cervena a nad
+     vsetkym ostatnym — je to jediny stav, v ktorom su cisla nizsie neplatne. */
+  .card.alert{border-left:4px solid var(--hi);background:#fff6f5}
+  .card.alert h2{color:var(--hi)}
+  svg .grid-l{stroke:var(--line);stroke-width:1}
+  .lg{display:flex;gap:16px;font-size:12px;color:var(--dim);margin-top:8px}
+  .lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .tabs button{background:none;border:0;border-bottom:2px solid transparent;
+               padding:9px 14px;cursor:pointer;color:var(--dim);font-size:13px}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Overview<span id="shopname"></span></h1>
+      <div class="lead">We check whether your ad platforms actually received your orders.</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="seg" id="range">
+        <button data-d="7">7 days</button>
+        <button data-d="30" class="on">30 days</button>
+        <button data-d="60">60 days</button>
+      </div>
+      <button class="act ghost" id="run">Refresh</button>
+    </div>
+  </header>
+
+  <div id="alerts"></div>
+
+  <!-- Onboarding: prve, co merchant vidi, kym nie je vsetko nastavene.
+       Bez neho musel sam uhadnut, ze po pripojeni GA4 ma este zadat e-mail
+       pre alerty — a appka, ktora sa neozve, nema zmysel. -->
+  <div class="card hidden" id="onboard">
+    <h2>Finish setting up TrackGap</h2>
+    <p class="note">Takes about two minutes — then it runs by itself</p>
+    <div id="obSteps"></div>
+  </div>
+
+  <div class="card hidden" id="setup">
+    <h2>Connect Google Analytics</h2>
+    <p class="note">We compare your Shopify orders against what actually reached GA4. Read-only access.</p>
+    <a id="ga4link"><button class="act">Connect GA4</button></a>
+  </div>
+
+  <div class="card hidden" id="picker">
+    <h2>Select a GA4 property</h2>
+    <p class="note">Pick once — we remember it.</p>
+    <div id="props"></div>
+  </div>
+
+  <div id="dash" class="hidden">
+    <!-- Strata pristupu. Musi byt UPLNE HORE a nad zalozkami: kym appka
+         nevidi do dat, vsetko pod tym je posledna znama snimka, nie
+         aktualny stav obchodu. -->
+    <div id="accesslost" class="hidden"></div>
+    <div class="tabs" id="tabs">
+      <button data-t="ga4" class="on">Google Analytics</button>
+      <button data-t="meta">Meta</button>
+      <button data-t="ads">Google Ads</button>
+      <button data-t="plan">Plan</button>
+    </div>
+
+    <div id="tab-ga4">
+      <div class="grid">
+        <div>
+          <div class="card hero" id="hero">
+            <span class="pill" id="pill">checking…</span>
+            <h3 id="heroH">—</h3>
+            <p id="heroP"></p>
+            <div class="impact">
+              <div class="l">Revenue your ad platforms never saw</div>
+              <div class="v" id="impactV">—</div>
+              <div class="s" id="impactS">Actual value of the missing orders — not an estimate.</div>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi"><div class="l">Orders</div><div class="n" id="k1">—</div><span class="tag dim">total</span></div>
+            <div class="kpi"><div class="l">Tracked</div><div class="n" id="k2">—</div><span class="tag ok" id="k2t">—</span></div>
+            <div class="kpi"><div class="l">Missing</div><div class="n" id="k3">—</div><span class="tag hi" id="k3t">—</span></div>
+            <div class="kpi"><div class="l">Duplicates</div><div class="n" id="k4">—</div><span class="tag dim">in GA4</span></div>
+          </div>
+
+          <div class="card hidden" id="split"></div>
+
+          <div class="card">
+            <h2>Orders vs tracked conversions</h2>
+            <p class="note">By day. The red area is what your analytics never saw.</p>
+            <div id="chart"></div>
+            <div class="lg">
+              <span><i style="background:#cfd4d8"></i>orders in your store</span>
+              <span><i style="background:#d72c0d"></i>missing in GA4</span>
+            </div>
+          </div>
+
+          <div id="findings"></div>
+        </div>
+
+        <div>
+          <div class="card health">
+            <h2>Tracking health</h2>
+            <p class="note">Where the data goes missing</p>
+            <div id="health"></div>
+            <button class="act ghost" id="changeprop" style="width:100%;margin-top:14px">Change GA4 property</button>
+          </div>
+
+          <div class="card" id="bfcard">
+            <h2>Conversion recovery</h2>
+            <p class="note" id="bfnote">We can send missing orders to GA4 server-side.</p>
+            <div id="bfbody"></div>
+          </div>
+
+          <div class="card hidden" id="histcard">
+            <h2>History</h2>
+            <p class="note">Recent checks</p>
+            <div id="hist"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-meta" class="hidden">
+      <div class="grid">
+        <div><div class="card" id="metaMain"></div></div>
+        <div><div class="card" id="metaSetup"></div></div>
+      </div>
+    </div>
+
+    <div id="tab-ads" class="hidden">
+      <div class="card">
+        <h2>Google Ads spend vs recorded sales</h2>
+        <p class="note">Read from your connected GA4 property — no extra setup</p>
+        <div id="adsBody">
+          <p class="muted" style="margin:0">Loading…</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-plan" class="hidden">
+      <div class="card" id="usage"></div>
+      <div id="plans"></div>
+      <div class="card">
+        <p class="muted" style="margin:0">Billing is handled by Shopify and appears
+          on your regular Shopify invoice. Cancel any time from your Shopify admin.
+          Going over your plan limit never stops the checks — we only let you know.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const qs=new URLSearchParams(location.search), shop=qs.get("shop");
+const $=(i)=>document.getElementById(i);
+const esc=(s)=>String(s).replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+const show=(i)=>$(i).classList.remove("hidden"), hide=(i)=>$(i).classList.add("hidden");
+let RANGE=30, STATE=null;
+
+/* ---------- autentifikacia ----------
+   Kazde volanie na nas server nesie session token z App Bridge. Server z neho
+   odvodi domenu obchodu — `?shop=` v URL uz nie je dokaz o niciom.
+   Bez tohto by ktokolvek s domenou obchodu citalzse trzby a prepisal
+   Measurement ID. */
+async function sessionToken(){
+  try{
+    if(window.shopify && shopify.idToken) return await shopify.idToken();
+  }catch(e){ /* mimo Shopify admina */ }
+  return qs.get("id_token")||null;
+}
+
+/** fetch, ktory vzdy prilozi session token. Pouzivat NAMIESTO fetch(). */
+async function api(path,opts={}){
+  const t=await sessionToken();
+  const headers=Object.assign({},opts.headers||{});
+  if(t) headers["Authorization"]="Bearer "+t;
+  const r=await fetch(path,Object.assign({},opts,{headers}));
+  if(r.status===401){
+    document.body.innerHTML='<div style="max-width:520px;margin:80px auto;'
+      +'font:15px/1.6 -apple-system,sans-serif;padding:0 20px">'
+      +'<h1 style="font-size:20px">Open TrackGap from your Shopify admin</h1>'
+      +'<p style="color:#6b7177">This page needs a session from Shopify. '
+      +'Go to Apps in your store admin and open TrackGap there.</p></div>';
+    throw new Error("unauthorized");
+  }
+  return r;
+}
+
+
+/** Navigacia na endpoint, ktory presmerovava (OAuth, billing).
+    <a href> by neposlalo Authorization hlavicku, tak token ide do URL. */
+async function goAuth(path,extra){
+  const t=await sessionToken();
+  const p=new URLSearchParams();
+  if(t) p.set("id_token",t);
+  if(shop) p.set("shop",shop);
+  if(extra) for(const [k,v] of new URLSearchParams(extra)) p.set(k,v);
+  const target=path+"?"+p.toString();
+  // OAuth musi opustit iframe, inak Google/Facebook odmietne zobrazenie
+  if(window.top!==window.self) window.top.location.href=location.origin+target;
+  else location.href=target;
+}
+
+if(!shop){ $("shopname").textContent=" — missing ?shop="; }
+else { $("ga4link").addEventListener("click",e=>{e.preventDefault();goAuth("/ga4/connect");}); boot(); }
+
+document.querySelectorAll("#range button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#range button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); RANGE=+b.dataset.d; drawChart();
+}));
+document.querySelectorAll("#tabs button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");
+  // guard: chybajuci panel nesmie zhodit prepinanie ostatnych tabov
+  for(const t of ["ga4","meta","ads","plan"]) $("tab-"+t)?.classList.add("hidden");
+  $("tab-"+b.dataset.t).classList.remove("hidden");
+  if(b.dataset.t==="meta") loadMeta();
+  if(b.dataset.t==="ads") loadAds();
+  if(b.dataset.t==="plan") loadPlans();
+}));
+$("run").addEventListener("click",()=>load(true));
+$("changeprop").addEventListener("click",()=>{hide("dash");showPicker();});
+
+async function boot(){
+  STATE=await api("/state?shop="+encodeURIComponent(shop)).then(r=>r.json());
+  // Shopify posiela technicku .myshopify.com domenu (napr. abc123-x1), co je
+  // pre merchanta necitatelne. Preferujeme skutocnu domenu obchodu.
+  const nice=STATE.primary_domain
+    || shop.replace(/\.myshopify\.com$/,"");
+  $("shopname").textContent=", "+nice;
+
+  renderOnboarding();
+  renderAccessLost();
+
+  // Dashboard ukazeme VZDY. Bez GA4 vieme povedat, kolko objednavok obchod ma
+  // a kolko z nich vobec moze byt spravne priradenych — to je hodnota, ktoru
+  // merchant dostane hned. GA4 je potom ponuka na spresnenie, nie podmienka
+  // vstupu (31.8.2026: predtym tu bola prazdna obrazovka s OAuth vyzvou).
+  show("dash");
+  loadBackfill(STATE);
+
+  if(!STATE.ga4_connected){ return loadOverview(); }
+  if(!STATE.ga4_property_id){ return showPicker(); }
+  load(false);
+}
+
+/**
+ * Banner "appka nevidi do tvojich dat".
+ *
+ * PRECO JE TO NAJDOLEZITEJSI PRVOK NA STRANKE: ked TrackGap stratí pristup,
+ * cisla nizsie su posledna znama snimka spred poruchy — nie stav obchodu
+ * teraz. Bez tohto upozornenia vyzeral dashboard uplne rovnako ako appka,
+ * ktora vsetko strazi, a merchant sa spoliehal na monitoring, ktory uz
+ * nebezal (1.9.2026).
+ */
+function renderAccessLost(){
+  const box=$("accesslost");
+  const a=(STATE||{}).access_lost;
+  if(!a){ box.className="hidden"; box.innerHTML=""; return; }
+
+  const google=a.kind==="google_auth";
+  const what=google
+    ? "TrackGap can no longer read your Google Analytics."
+    : "TrackGap can no longer read your Shopify orders.";
+  const how=google
+    ? "Reconnect your Google account to resume checks."
+    : "Reopen the app from your Shopify admin to reauthorize it.";
+
+  // "Uz tri dni" je konkretnejsie nez datum a hovori, ako dlho merchant
+  // bezi naslepo.
+  let since="";
+  if(a.since){
+    const h=Math.floor((Date.now()-new Date(a.since.replace(" ","T")+"Z"))/3600000);
+    since=h<24 ? `for ${h||1} hour${h===1?"":"s"}`
+               : `for ${Math.floor(h/24)} day${Math.floor(h/24)===1?"":"s"}`;
+  }
+
+  box.className="card alert";
+  box.innerHTML=
+    `<h2>Checks are paused — ${esc(what)}</h2>`
+   +`<p class="note">While this lasts, we are <strong>not</strong> monitoring `
+   +`your tracking${since?" (paused "+esc(since)+")":""}. Anything below is the `
+   +`last result from before we lost access. ${esc(how)}</p>`
+   +`<button id="alfix" class="act">${google?"Reconnect Google":"Reauthorize"}</button>`;
+
+  $("alfix").addEventListener("click",()=>{
+    if(google) goAuth("/ga4/connect");
+    else goAuth("/auth");
+  });
+}
+
+/**
+ * Onboarding checklist.
+ *
+ * PRECO: merchant musi zvladnut instalaciu bez nas. Kroky su zamerne v poradi
+ * podla toho, co bez coho nefunguje, a kazdy hovori PRECO ho treba — nie len
+ * "spravte toto". Karta zmizne, ked je vsetko hotove; nema zmysel zaberat
+ * miesto navzdy.
+ */
+function renderOnboarding(){
+  const st=STATE||{};
+  const px=st.pixel||{};
+  const steps=[
+    {
+      done:true,
+      title:"App installed",
+      why:"We can read your orders — order IDs and amounts only, no customer "
+         +"names, e-mails or addresses.",
+      action:null,
+    },
+    {
+      done:!!st.pixel && !!px.installed,
+      title:"Web pixel reporting",
+      why:"Our own pixel is the independent witness that tells apart “the "
+         +"event never fired” from “it fired but GA4 lost it”. It activates "
+         +"itself — it just needs a few visits to report.",
+      action:null,
+      pending:"Waiting for the first visits to your store.",
+    },
+    {
+      done:!!st.ga4_connected,
+      title:"Google Analytics connected",
+      why:"Read-only. Without it we cannot see which orders actually arrived, "
+         +"and Google Ads spend comes through here too.",
+      action:st.ga4_connected?null:{label:"Connect GA4",fn:"goAuth('/ga4/connect')"},
+    },
+    {
+      done:!!st.ga4_property_id,
+      title:"GA4 property selected",
+      why:"Tells us which property to compare against. Picked once, remembered.",
+      action:(st.ga4_connected&&!st.ga4_property_id)
+        ?{label:"Choose property",fn:"showPicker()"}:null,
+    },
+    {
+      done:!!st.alert_email && st.alert_email_status!=="failed",
+      title:"Alert e-mail set",
+      why:"The whole point is that we tell you the day tracking breaks. "
+         +"Without an address the checks still run, but nobody hears about it.",
+      action:null,
+      // Zadana, ale nedorucitelna adresa je HORSIA nez ziadna: merchant si
+      // mysli, ze je strazeny, a mlcanie si vysvetli ako "vsetko v poriadku".
+      pending:st.alert_email_status==="failed"
+        ? "We could not deliver to "+st.alert_email+". Enter a different address."
+        : null,
+      form:!st.alert_email || st.alert_email_status==="failed",
+    },
+  ];
+
+  const pending=steps.filter(s=>!s.done);
+  if(!pending.length){ hide("onboard"); return; }
+  show("onboard");
+
+  $("obSteps").innerHTML=steps.map(s=>`
+    <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)">
+      <div style="flex:0 0 18px;font-size:14px;line-height:20px;color:${s.done?"var(--ok)":"var(--dim)"}">
+        ${s.done?"&#10003;":"&#9675;"}</div>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:13px;${s.done?"color:var(--dim)":""}">${esc(s.title)}</div>
+        <div class="muted" style="margin-top:2px">${esc(s.why)}</div>
+        ${!s.done&&s.pending?`<div class="muted" style="margin-top:4px;font-style:italic">${esc(s.pending)}</div>`:""}
+        ${!s.done&&s.action?`<button class="act ghost" style="margin-top:8px"
+          onclick="${s.action.fn}">${esc(s.action.label)}</button>`:""}
+        ${!s.done&&s.form?`<div style="display:flex;gap:8px;margin-top:8px">
+          <input id="obEmail" placeholder="you@yourstore.com" style="flex:1">
+          <button class="act" onclick="saveAlertEmail()">Save</button>
+        </div><p class="muted" id="obEmailMsg" style="margin:6px 0 0"></p>`:""}
+      </div>
+    </div>`).join("");
+}
+
+async function saveAlertEmail(){
+  const el=$("obEmail"), msg=$("obEmailMsg");
+  const email=(el.value||"").trim();
+  if(!email){ msg.textContent="Enter an e-mail address."; return; }
+  msg.textContent="Saving…";
+  try{
+    const r=await api("/alerts/setup?shop="+encodeURIComponent(shop),{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({email,test:true}),
+    }).then(x=>x.json());
+    if(r.error){ msg.textContent=r.error; return; }
+    STATE.alert_email=email;
+    STATE.alert_email_status=r.test_failed?"failed":"sent";
+    msg.textContent=r.test_failed
+      ? "Saved, but the test e-mail could not be sent."
+      : "Saved — check your inbox for a test message.";
+    setTimeout(renderOnboarding,1500);
+  }catch(e){ msg.textContent="Could not save."; }
+}
+
+/** Prehlad zo Shopify + pixelu, ked GA4 este nie je pripojene. */
+async function loadOverview(){
+  const d=await api("/overview?shop="+encodeURIComponent(shop)+"&days="+RANGE)
+    .then(r=>r.json()).catch(()=>null);
+  if(!d||d.error){ return connectPrompt(); }
+
+  $("pill").textContent="not connected";
+  $("pill").className="pill warn";
+  $("heroH").textContent=d.unattributable_pct+"% of orders";
+  $("heroP").textContent="cannot be matched to a visit — no analytics identifier "
+    +"was captured, so any conversion sent for them would be attributed as direct.";
+
+  $("k1").textContent=d.orders;
+  $("k2").textContent=d.with_identity;
+  $("k2t").textContent="can be attributed";
+  $("k3").textContent=d.unattributable;
+  $("k3t").textContent=d.unattributable_pct+"% of orders";
+  // K4 je v dashboarde "Duplicates" — to bez GA4 este nevieme
+  $("k4").textContent="—";
+
+  // Suma MUSI byt vyplnena aj bez GA4 — je to prve cislo, ktore merchant
+  // hlada. Predtym tu ostavala pomlcka a hlavna karta vyzerala rozbito.
+  // Ukazujeme hodnotu nepriraditelnych objednavok, nie cely obrat.
+  const money=(d.unattributable_revenue||0).toLocaleString("en-US",
+    {minimumFractionDigits:2,maximumFractionDigits:2});
+  document.querySelector(".impact .l").textContent=
+    "Revenue riding on orders we cannot attribute";
+  $("impactV").textContent=(d.currency?d.currency+" ":"")+money;
+  $("impactS").textContent=d.unattributable
+    ? "Value of the "+d.unattributable+" orders with no analytics identifier."
+    : "Every order in this range carries an identifier.";
+
+  $("findings").innerHTML=`
+    <h2>Connect Google Analytics to go further</h2>
+    <p class="note">Right now TrackGap can see your orders and which of them
+      carry an analytics identifier. Connecting GA4 adds the other half: which
+      orders actually arrived, which are duplicated, and which can be sent back.</p>
+    <table>
+      <tr><td>Orders in the last ${d.days} days</td><td class="num">${d.orders}</td></tr>
+      <tr><td>With an analytics identifier</td><td class="num">${d.with_identity}</td></tr>
+      <tr><td>With consent granted</td><td class="num">${d.with_consent}</td></tr>
+      <tr><td>Pixel events captured</td><td class="num">${d.pixel_seen}</td></tr>
+    </table>
+    <button class="act" style="width:100%;margin-top:14px"
+      onclick="goAuth('/ga4/connect')">Connect Google Analytics</button>
+    <p class="muted" style="margin-top:8px">Read-only access. We only read
+      transaction IDs and traffic sources.</p>`;
+  hide("split");
+}
+
+function connectPrompt(){
+  $("findings").innerHTML=`
+    <h2>Connect Google Analytics</h2>
+    <p class="note">TrackGap compares your orders with what GA4 recorded.</p>
+    <button class="act" style="width:100%" onclick="goAuth('/ga4/connect')">
+      Connect Google Analytics</button>`;
+}
+
+/**
+ * Google Ads cez GA4.
+ *
+ * Zamerne NEsľubujeme stav conversion action — GA4 ho nedava a tvrdit opak by
+ * znamenalo, ze merchant caka informaciu, ktoru nikdy nedostane.
+ */
+async function loadAds(){
+  const box=$("adsBody");
+  if(!STATE || !STATE.ga4_connected || !STATE.ga4_property_id){
+    box.innerHTML=`<p class="muted" style="margin:0 0 12px">Google Ads data
+      comes from your GA4 property, so connect GA4 first. No Google Ads API
+      access or developer token is needed.</p>
+      <button class="act" style="width:100%"
+        onclick="goAuth('/ga4/connect')">Connect Google Analytics</button>`;
+    return;
+  }
+  box.innerHTML='<p class="muted" style="margin:0">Loading…</p>';
+  const d=await api(`/ads?shop=${encodeURIComponent(shop)}&days=${RANGE}`)
+    .then(r=>r.json()).catch(()=>null);
+  if(!d || d.error){
+    box.innerHTML=`<p class="muted" style="margin:0">${esc(d&&d.error?d.error:"Could not load Google Ads data.")}</p>`;
+    return;
+  }
+
+  const s=d.summary||{};
+  if(!s.campaigns){
+    box.innerHTML=`<p class="muted" style="margin:0">No Google Ads spend found
+      in this GA4 property for the last ${d.days} days. If you do run Google
+      Ads, link the Ads account to GA4 — without that link GA4 receives no
+      cost data.</p>`;
+    return;
+  }
+
+  const money=(n)=>Number(n||0).toLocaleString("en-US",
+    {minimumFractionDigits:2,maximumFractionDigits:2});
+
+  let html=`
+    <table>
+      <tr><td>Campaigns with spend</td><td class="num">${s.campaigns}</td></tr>
+      <tr><td>Ad spend</td><td class="num">${money(s.cost)}</td></tr>
+      <tr><td>Revenue GA4 attributes to them</td><td class="num">${money(s.revenue)}</td></tr>
+      <tr><td>Transactions</td><td class="num">${s.transactions}</td></tr>
+      <tr><td>ROAS</td><td class="num">${s.roas!=null?s.roas:"—"}</td></tr>
+    </table>`;
+
+  for(const f of (d.findings||[])){
+    html+=`<div class="f ${esc(f.severity)}" style="margin-top:12px">
+      <strong>${f.type==="ads_all_silent"
+        ? "Google Ads spend with no measured sales at all"
+        : "Campaigns spending without a single conversion"}</strong>
+      <p class="muted" style="margin:6px 0 0">${esc(f.detail.note)}</p></div>`;
+  }
+
+  html+=`<h2 style="margin-top:18px">Campaigns</h2>
+    <table><tr><th>Campaign</th><th class="num">Spend</th>
+      <th class="num">Clicks</th><th class="num">Sales</th></tr>`;
+  for(const c of (d.campaigns||[])){
+    const bad=c.transactions===0 && c.clicks>0;
+    html+=`<tr><td>${esc(c.campaign)}</td>
+      <td class="num">${money(c.cost)}</td>
+      <td class="num">${c.clicks}</td>
+      <td class="num"${bad?' style="color:var(--hi);font-weight:650"':""}>${c.transactions}</td></tr>`;
+  }
+  html+="</table>";
+
+  // Hranice toho, co vieme, hovorime nahlas — nie schovane v dokumentacii.
+  for(const l of (d.limitations||[])){
+    html+=`<p class="muted" style="margin-top:12px">${esc(l)}</p>`;
+  }
+  box.innerHTML=html;
+}
+
+async function showPicker(){
+  show("picker");
+  const list=await api("/ga4/properties?shop="+encodeURIComponent(shop))
+    .then(r=>r.json()).catch(()=>null);
+  if(!Array.isArray(list)){ hide("picker"); show("setup"); return; }
+  $("props").innerHTML='<table><tr><th>Property</th><th>ID</th><th></th></tr>'+
+    list.map(p=>`<tr><td>${esc(p.name)}</td><td><code>${esc(p.id)}</code></td>
+      <td class="num"><button class="act ghost" onclick="pick('${esc(p.id)}')">select</button></td></tr>`).join("")+
+    "</table>";
+}
+async function pick(id){
+  await api(`/ga4/select?shop=${encodeURIComponent(shop)}&property=${id}`);
+  hide("picker"); show("dash"); load(true);
+}
+
+async function load(force){
+  const b=$("run"); b.disabled=true; $("pill").textContent="checking…";
+  try{
+    const res=await api(`/check?shop=${encodeURIComponent(shop)}${force?"&force=1":""}`);
+    const d=await res.json();
+    // 428 = appka este nie je nastavena. NIE je to chyba a nesmie tak vyzerat:
+    // merchantovi (a reviewerovi) treba ukazat tlacidlo dalsieho kroku, nie
+    // cervenu hlasku, z ktorej sa neda nic urobit.
+    if(res.status===428 || d.error==="setup_required"){
+      $("pill").textContent="setup";
+      $("heroH").textContent="Finish setup to start checking";
+      $("heroP").textContent=d.message||"One more step is needed.";
+      if(d.step==="ga4_property"){ showPicker(); } else { connectPrompt(); }
+      b.disabled=false; return;
+    }
+    if(d.error) throw new Error(d.error);
+    render(d); drawChart(); loadHistory();
+    // server vratil stale vysledok a cerstvy pocita na pozadi — dokresli ho,
+    // ked bude hotovy, nech merchant necaka na plny check
+    if(d.refreshing){ $("pill").textContent+=" · updating"; pollFresh(); }
+  }catch(e){ $("pill").textContent="error"; $("heroH").textContent=e.message; }
+  b.disabled=false;
+}
+
+let pollTimer=null;
+function pollFresh(tries=0){
+  if(tries>=20) return;                       // ~80 s a vzdavame to do dalsieho loadu
+  clearTimeout(pollTimer);
+  pollTimer=setTimeout(async()=>{
+    try{
+      const d=await api("/check?shop="+encodeURIComponent(shop)).then(r=>r.json());
+      if(d.error) return;
+      if(d.refreshing){ pollFresh(tries+1); return; }
+      render(d); drawChart(); loadHistory();
+    }catch(e){ /* docasny vypadok — skusi to dalsi load */ }
+  }, 4000);
+}
+
+function render(d){
+  const s=d.summary, pct=s.missing_pct;
+
+  // Ziadna objednavka nie je dost stara na porovnanie (GA4 sa dopocitava
+  // ~48 h). Tvarit sa v tomto stave, ze "vsetko je v poriadku", je klamlive —
+  // merchant s novym obchodom videl "Every order is being tracked" a pod tym
+  // graf plny chybajucich objednavok (31.8.2026).
+  if(!s.orders_compared && s.orders_too_recent){
+    $("hero").className="card hero";
+    $("pill").textContent="Waiting for data";
+    $("heroH").textContent="Nothing to compare yet";
+    $("heroP").textContent=s.orders_too_recent+" order"
+      +(s.orders_too_recent>1?"s":"")+" placed in the last 48 hours. "
+      +"Analytics platforms need up to two days to finalise them, so we hold "
+      +"off before reporting a gap.";
+    $("impactV").textContent="—";
+    $("impactS").textContent="First comparison runs automatically.";
+    $("k1").textContent=s.orders_too_recent;
+    $("k2").textContent="—"; $("k2t").textContent="pending";
+    $("k3").textContent="—"; $("k3t").textContent="pending";
+    $("k4").textContent="—";
+    hide("split");
+    drawChart();
+    return;
+  }
+
+  $("hero").className="card hero"+(pct>20?" bad":pct<=2?" clean":"");
+  $("pill").textContent=pct>2?"Tracking gaps found":"Tracking looks healthy";
+  $("heroH").textContent=pct>2?`${pct}% of conversions are not being tracked`
+                              :"Every order is being tracked";
+  $("heroP").textContent=pct>2
+    ? `${s.missing} of ${s.orders_compared} orders never reached your ad platforms.`
+    : `All ${s.orders_compared} orders arrived in GA4.`;
+
+  const lost=(d.findings.find(f=>f.type==="missing")?.detail?.lost_revenue) ?? null;
+  $("impactV").textContent = lost!=null ? fmt(lost) : "—";
+  $("impactS").textContent = lost!=null
+    ? "Actual value of the missing orders — not an estimate from ad spend."
+    : "No missing orders right now.";
+
+  // Rozdelenie podla priciny — merchant musi vidiet, co ma opravovat.
+  // Odmietnuty suhlas sa opravit neda, rozbite meranie ano.
+  const bd=d.breakdown||{};
+  const ly=d.layers||{};
+  const split=$("split");
+  if(s.missing>0 && (bd.consent_declined||bd.tracking_broken||bd.no_identity)){
+    split.classList.remove("hidden");
+
+    // Tretia vrstva: kde presne sa retazec pretrhol. Toto je jediny udaj,
+    // ktory merchantovi povie, CI ma opravovat web alebo meranie — a je to
+    // presne to, co konkurencia bez napojenia na GA4 povedat nevie.
+    const layerRows = (ly.delivery_broken||ly.never_fired) ? `
+      <h2 style="margin-top:18px">Where the chain breaks</h2>
+      <p class="note">Our own pixel is an independent witness</p>
+      <table>
+        <tr><td><strong>Fired, but never arrived</strong><br>
+          <span class="muted">The browser sent it; GA4 has no record.
+            Check your GA4 tag and measurement ID.</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--hi)">${ly.delivery_broken||0}</td></tr>
+        <tr><td><strong>Never fired at all</strong><br>
+          <span class="muted">No purchase event left the browser.
+            Check the thank-you page, consent banner or GTM trigger.</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--hi)">${ly.never_fired||0}</td></tr>
+        ${ly.before_pixel ? `<tr><td><strong>Before TrackGap was installed</strong><br>
+          <span class="muted">Our pixel was not running yet — we do not judge these</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--dim)">${ly.before_pixel}</td></tr>` : ""}
+      </table>` : (ly.unknown ? `
+      <p class="muted" style="margin-top:12px">Our web pixel has not reported yet,
+        so we cannot tell whether these conversions left the browser or got lost
+        on the way. It starts collecting automatically — check back after your
+        next few orders.</p>` : "");
+
+    split.innerHTML=`
+      <h2>What is actually wrong</h2>
+      <p class="note">Not every missing order is a bug</p>
+      <table>
+        <tr><td><strong>Tracking is broken</strong><br>
+          <span class="muted">Order had consent and an ID, but never arrived</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--hi)">${bd.tracking_broken||0}</td></tr>
+        <tr><td><strong>Customer declined consent</strong><br>
+          <span class="muted">Nothing to fix — this is the visitor's choice</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--dim)">${bd.consent_declined||0}</td></tr>
+        <tr><td><strong>No identifier captured</strong><br>
+          <span class="muted">Ad blocker, or the visit predates our pixel</span></td>
+          <td class="num" style="font-size:20px;font-weight:650;color:var(--dim)">${bd.no_identity||0}</td></tr>
+      </table>
+      ${bd.tracking_broken>0
+        ? `<p class="muted" style="margin-top:12px">Of your ${s.missing_pct}% gap,
+           <strong style="color:var(--hi)">${bd.broken_pct}%</strong> is fixable —
+           the rest is consent and blockers.</p>`
+        : '<p class="muted" style="margin-top:12px">None of the missing orders are '
+          + 'caused by broken tracking. Your setup is working.</p>'}
+      ${layerRows}`;
+  } else {
+    split.classList.add("hidden");
+  }
+
+  $("k1").textContent=s.orders_compared;
+  // "Tracked" musi byt pocet SPAROVANYCH objednavok, nie pocet GA4 transakcii —
+  // inak tracked + missing != orders a merchant to hned vidi.
+  const matched=Math.max(0,s.orders_compared-s.missing);
+  $("k2").textContent=matched;
+  $("k2t").textContent=(100-pct).toFixed(1)+"% of orders";
+  $("k3").textContent=s.missing;
+  $("k3t").textContent=pct+"% of orders";
+  $("k3t").className="tag "+(pct>20?"hi":pct>5?"mid":"ok");
+  $("k4").textContent=s.duplicates;
+
+  const v=d.value_gap||{};
+  const rows=[
+    ["Shopify orders", '<span class="dot g"></span>loaded'],
+    ["GA4 property", '<span class="dot g"></span>connected'],
+    ["Value match", v.kind==="match"?'<span class="dot g"></span>exact'
+      :v.kind==="inconsistent"?'<span class="dot r"></span>inconsistent'
+      :'<span class="dot y"></span>partial'],
+    ["Too recent to compare", s.orders_too_recent+" orders"],
+    ["Extra in GA4", (s.ghosts??0)+""],
+  ];
+  $("health").innerHTML=rows.map(([a,b])=>
+    `<div class="row"><span>${a}</span><span>${b}</span></div>`).join("");
+
+  $("alerts").innerHTML=(d.alerts||[]).map(a=>
+    `<div class="card" style="border-left:3px solid var(--hi)">
+       <h2>Changed since last check</h2>
+       <p class="note" style="margin:0">${esc(a.message)}</p></div>`).join("");
+
+  const names={missing:"Missing orders",duplicate:"Duplicate transactions",
+    ghost:"In GA4 but not in your store",revenue_gap:"Revenue mismatch",
+    value_note:"How revenue is counted",cardinality:"GA4 is aggregating transactions"};
+  $("findings").innerHTML=d.findings.length
+    ? '<div class="card"><h2>Findings</h2><p class="note">Most serious first</p>'
+      + d.findings.map(f=>{
+        let p="";
+        if(f.type==="missing"){
+          const src=Object.entries(f.detail.by_source||{}).sort((a,b)=>b[1]-a[1])
+            .slice(0,4).map(([k,v])=>`${esc(k)}: ${v}`).join(" · ");
+          p=`${f.detail.pct}% of orders${f.detail.lost_revenue!=null?", worth "+fmt(f.detail.lost_revenue):""}.`
+            +(src?`<br>By source — ${src}`:"")
+            +`<br><code>${(f.detail.order_numbers||[]).slice(0,10).map(esc).join(", ")}</code>`;
+        } else if(f.type==="value_note"||f.type==="revenue_gap"){
+          p=esc(f.detail.note||"");
+          if(f.detail.revenue_orders!=null)
+            p+=`<br><span class="muted">store ${f.detail.revenue_orders} · GA4 ${f.detail.revenue_ga4}</span>`;
+        } else if(f.type==="cardinality"){ p=esc(f.detail.note); }
+        else{ p=(f.detail.note?esc(f.detail.note)+"<br>":"")
+              +`<code>${(f.detail.transaction_ids||[]).slice(0,8).map(esc).join(", ")}</code>`; }
+        return `<div class="f ${f.severity}"><h4>${names[f.type]||f.type}${f.severity!=="info"?" — "+f.count:""}</h4><p>${p}</p></div>`;
+      }).join("")+"</div>"
+    : '<div class="card"><h2>Findings</h2><p class="note" style="margin:0">None — your tracking matches.</p></div>';
+}
+
+function fmt(n){
+  return new Intl.NumberFormat("en-US",{style:"currency",currency:"EUR",
+    maximumFractionDigits:0}).format(n);
+}
+
+async function drawChart(){
+  const rows=await api(`/daily?shop=${encodeURIComponent(shop)}&days=${RANGE}`)
+    .then(r=>r.json()).catch(()=>[]);
+  if(!Array.isArray(rows)||!rows.length){
+    $("chart").innerHTML='<p class="muted">Not enough data yet.</p>'; return; }
+  const W=760,H=210,P={t:10,r:8,b:26,l:34};
+  const max=Math.max(...rows.map(r=>r.orders),1);
+  const bw=(W-P.l-P.r)/rows.length;
+  const y=(v)=>P.t+(H-P.t-P.b)*(1-v/max);
+  let bars="",labels="";
+  rows.forEach((r,i)=>{
+    const x=P.l+i*bw, w=Math.max(bw-2,1);
+    const hAll=(H-P.t-P.b)*(r.orders/max), hMiss=(H-P.t-P.b)*((r.missing||0)/max);
+    bars+=`<rect x="${x}" y="${y(r.orders)}" width="${w}" height="${hAll}" fill="#cfd4d8" rx="2"/>`;
+    if(r.missing) bars+=`<rect x="${x}" y="${H-P.b-hMiss}" width="${w}" height="${hMiss}" fill="#d72c0d" rx="2"/>`;
+    if(i%Math.ceil(rows.length/7)===0)
+      labels+=`<text x="${x}" y="${H-8}" font-size="10" fill="#6b7177">${r.d.slice(5)}</text>`;
+  });
+  let grid="";
+  for(let i=0;i<=3;i++){
+    const v=Math.round(max*i/3), yy=y(v);
+    grid+=`<line class="grid-l" x1="${P.l}" y1="${yy}" x2="${W-P.r}" y2="${yy}"/>
+           <text x="4" y="${yy+4}" font-size="10" fill="#6b7177">${v}</text>`;
+  }
+  $("chart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">${grid}${bars}${labels}</svg>`;
+}
+
+async function loadHistory(){
+  const h=await api("/history?shop="+encodeURIComponent(shop))
+    .then(r=>r.json()).catch(()=>[]);
+  if(!Array.isArray(h)||h.length<2) return;
+  show("histcard");
+  $("hist").innerHTML='<table><tr><th>when</th><th class="num">missing</th><th class="num">dupes</th></tr>'
+    +h.slice(0,8).map(r=>`<tr><td>${esc(r.ran_at.slice(5,16))}</td>
+      <td class="num">${r.missing} (${r.missing_pct}%)</td>
+      <td class="num">${r.duplicates}</td></tr>`).join("")+"</table>";
+}
+
+const BF_REASONS={
+  no_identity:"no GA4 client ID", no_client_id:"no GA4 client ID",
+  consent_denied:"customer declined consent",
+  consent_unknown:"consent could not be verified", session_expired:"older than 24h",
+  already_in_ga4:"already in GA4", invalid_payload:"invalid payload",
+  older_than_7_days:"older than 7 days", no_identifier:"no matchable identifier",
+};
+
+async function loadBackfill(st){
+  if(!st.backfill_enabled){
+    $("bfbody").innerHTML=`
+      <p class="muted" style="margin:0 0 12px">When an order does not reach GA4,
+      we can send it ourselves — with its original traffic source. We need your
+      Measurement ID and an API secret.</p>
+      <input id="mid" placeholder="G-XXXXXXXXXX" autocomplete="off">
+      <input id="msec" type="password" placeholder="API secret"
+             autocomplete="off" spellcheck="false">
+      <button class="act" id="bfsave" style="width:100%">Enable recovery</button>
+      <p class="muted" id="bferr" style="margin:8px 0 0"></p>
+      <p class="muted" style="margin:10px 0 0">GA4 → Admin → Data Streams →
+        your stream → Measurement Protocol API secrets</p>
+      <p class="muted" style="margin:8px 0 0">Stored encrypted. We never show it
+        again and it is never written to logs.</p>`;
+    $("bfsave").addEventListener("click",async()=>{
+      const b=$("bfsave"); b.disabled=true; $("bferr").textContent="saving…";
+      const r=await api("/backfill/setup",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({shop,measurement_id:$("mid").value.trim(),
+                             api_secret:$("msec").value.trim()})}).then(r=>r.json());
+      if(r.error){ $("bferr").textContent=r.error; b.disabled=false; }
+      else location.reload();
+    });
+    return;
+  }
+  const d=await api("/backfill/stats?shop="+encodeURIComponent(shop))
+    .then(r=>r.json()).catch(()=>null);
+  if(!d){ $("bfbody").innerHTML='<p class="muted">—</p>'; return; }
+  const sent=d.stats.filter(s=>s.status==="sent").reduce((a,s)=>a+s.n,0);
+  const skipped=d.stats.filter(s=>s.status==="skipped");
+  const failed=d.stats.filter(s=>s.status==="failed").reduce((a,s)=>a+s.n,0);
+  $("bfnote").textContent="Last 30 days";
+  $("bfbody").innerHTML=`
+    <div style="display:flex;gap:14px;margin-bottom:12px">
+      <div><div class="muted">recovered</div><div style="font-size:24px;font-weight:650;color:var(--ok)">${sent}</div></div>
+      <div><div class="muted">not possible</div><div style="font-size:24px;font-weight:650">${skipped.reduce((a,s)=>a+s.n,0)}</div></div>
+      ${failed?`<div><div class="muted">failed</div><div style="font-size:24px;font-weight:650;color:var(--hi)">${failed}</div></div>`:""}
+    </div>
+    ${skipped.length?'<table><tr><th>reason</th><th class="num">count</th></tr>'
+      +skipped.map(s=>`<tr><td>${esc(BF_REASONS[s.reason]||s.reason||"—")}</td>
+        <td class="num">${s.n}</td></tr>`).join("")+"</table>":""}
+    <p class="muted" style="margin-top:10px">We never send conversions without
+      consent or without a client ID — they would be attributed incorrectly.</p>
+    <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+      <div class="muted">Sending to
+        <code>${esc(st.mp_measurement_id||"—")}</code></div>
+      <div class="muted" style="margin-top:2px">API secret stored ·
+        <a href="#" id="bfchange" style="color:var(--info)">change</a></div>
+    </div>`;
+  $("bfchange")?.addEventListener("click",(e)=>{
+    e.preventDefault();
+    loadBackfill({...st,backfill_enabled:false});
+  });
+}
+
+/* ---------- Meta ---------- */
+let META_ACCOUNTS=null;
+
+async function loadMeta(){
+  const d=await api("/meta/compare?shop="+encodeURIComponent(shop))
+    .then(r=>r.json()).catch(()=>null);
+  if(!d||!d.configured){ metaSetupForm(); $("metaMain").innerHTML=
+    `<h2>Meta conversions</h2><p class="note">Connect your ad account to compare.</p>
+     <p class="muted" style="margin:0">Meta only reports conversions as daily totals —
+     there is no way to list individual orders. So here we compare counts, and can
+     send missing purchases back through the Conversions API.</p>`; return; }
+
+  $("metaSetup").innerHTML=`<h2>Connection</h2>
+    <p class="note">Meta ad account linked</p>
+    <button class="act ghost" style="width:100%" onclick="metaSetupForm()">Change</button>`;
+
+  if(d.error){
+    // Token z Events Managera je viazany len na pixel — na citanie Insights
+    // treba ads_read. Nie je to chyba, len uzsi rozsah.
+    const perms=/permission/i.test(d.error);
+    $("metaMain").innerHTML=`
+      <h2>Meta conversions</h2>
+      ${perms?`
+        <p class="note">Your token can send conversions, but not read reports.</p>
+        <p class="muted" style="margin:0 0 12px">The token generated in Events
+          Manager is scoped to your pixel only. Sending missing purchases back
+          works — reading daily conversion counts needs a token with
+          <code>ads_read</code>.</p>
+        <table>
+          <tr><td>Send missing conversions to Meta</td>
+              <td class="num" style="color:var(--ok);font-weight:600">Working</td></tr>
+          <tr><td>Read daily conversion counts</td>
+              <td class="num muted">Needs ads_read</td></tr>
+        </table>
+        <p class="muted" style="margin-top:12px">To enable reading: Business
+          Settings → Users → System Users → assign your ad account →
+          Generate token with <code>ads_read</code>. One-click sign-in that
+          asks for this automatically is coming.</p>`
+      :`<p class="note" style="color:var(--hi)">${esc(d.error)}</p>`}`;
+    return;
+  }
+
+  const s=d.summary;
+  const bad=s.gap_pct>15;
+  $("metaMain").innerHTML=`
+    <h2>Meta conversions</h2>
+    <p class="note">Last 30 days · <span class="muted">${esc(d.caveat)}</span></p>
+    <div class="kpis" style="margin:0 0 14px">
+      <div class="kpi"><div class="l">Orders</div><div class="n">${s.shopify_orders}</div></div>
+      <div class="kpi"><div class="l">Meta reports</div><div class="n">${s.meta_conversions}</div></div>
+      <div class="kpi"><div class="l">Gap</div><div class="n" style="color:${bad?"var(--hi)":"var(--ink)"}">${s.gap}</div>
+        <span class="tag ${bad?"hi":"dim"}">${s.gap_pct}%</span></div>
+      <div class="kpi"><div class="l">Ad spend</div><div class="n">${fmt(s.spend)}</div></div>
+    </div>
+    <table><tr><th>date</th><th class="num">orders</th><th class="num">Meta</th><th class="num">spend</th></tr>
+    ${d.rows.slice(-14).reverse().map(r=>`<tr><td>${esc(r.date)}</td>
+      <td class="num">${r.shopify_orders}</td>
+      <td class="num">${Math.round(r.meta_conversions||0)}</td>
+      <td class="num">${fmt(r.meta_spend||0)}</td></tr>`).join("")}</table>
+    <p style="margin-top:12px"><button class="act ghost" onclick="refreshMeta()">Refresh from Meta</button></p>`;
+}
+
+async function refreshMeta(){
+  $("metaMain").innerHTML='<p class="muted">loading from Meta…</p>';
+  await api(`/meta/compare?shop=${encodeURIComponent(shop)}&refresh=1`);
+  loadMeta();
+}
+
+function metaSetupForm(){
+  const oauth=STATE&&STATE.meta_oauth_available;
+  $("metaSetup").innerHTML=`
+    <h2>Connect Meta</h2>
+    <p class="note">Read-only. We never change your campaigns.</p>
+    ${oauth?`
+      <button class="act" style="width:100%" onclick="goAuth('/meta/connect')">Sign in with Facebook</button>
+      <p class="muted" style="margin:8px 0 14px">One click. We ask only for
+        permission to read your ad reports.</p>
+      <div style="border-top:1px solid var(--line);padding-top:12px">
+        <p class="muted" style="margin:0 0 8px">Or paste an access token instead:</p>
+      </div>`:""}
+    <ol style="padding-left:18px;margin:0 0 12px;font-size:13px;color:var(--dim)">
+      <li>Open <a href="https://business.facebook.com/events_manager2/list/"
+          target="_blank" rel="noreferrer" style="color:var(--info)">Events Manager</a></li>
+      <li>Pick your pixel → Settings</li>
+      <li>Scroll to <strong>Conversions API</strong> → Generate access token</li>
+    </ol>
+    <input id="mtok" type="password" placeholder="Access token"
+           autocomplete="off" spellcheck="false">
+    <button class="act ${oauth?"ghost":""}" style="width:100%"
+            onclick="metaLoadAccounts()">Continue with token</button>
+    <p class="muted" id="mterr" style="margin:8px 0 0"></p>
+    <p class="muted" style="margin:10px 0 0">Stored encrypted. A token made in
+      Events Manager can send conversions but not read reports.</p>`;
+}
+
+async function metaLoadAccounts(){
+  const tok=$("mtok").value.trim();
+  if(!tok) return;
+  $("mterr").textContent="checking token…";
+  const d=await api("/meta/accounts",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token:tok})}).then(r=>r.json());
+  if(d.error){ $("mterr").textContent=d.error; return; }
+  META_ACCOUNTS=d;
+  const pix=d.pixels||[];
+  const canRead=d.can_read;
+  $("metaSetup").innerHTML=`
+    <h2>Connect Meta</h2>
+    <p class="note">Token works. Now pick what to read.</p>
+    ${canRead?`
+      <label class="muted">Ad account</label>
+      <select id="macc">${d.accounts.map(a=>
+        `<option value="${esc(a.id)}">${esc(a.name)}${a.currency?" ("+esc(a.currency)+")":""}</option>`).join("")}</select>
+      <label class="muted">What counts as a purchase</label>
+      <select id="mact">${d.action_types.map(t=>
+        `<option value="${esc(t.id)}">${esc(t.label)}</option>`).join("")}</select>`
+    :`<div style="background:#f6f8f8;border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">Send-only token</div>
+        <p class="muted" style="margin:0">This token can send conversions but not
+          read reports — that is normal for tokens made in Events Manager.
+          You can still enable recovery below.</p>
+      </div>
+      <input type="hidden" id="macc" value="">
+      <input type="hidden" id="mact" value="offsite_conversion.fb_pixel_purchase">`}
+    <label class="muted">Pixel — enables sending missing conversions back</label>
+    ${pix.length
+      ? `<select id="mpix"><option value="">Do not send anything back</option>${
+          pix.map(p=>`<option value="${esc(p.id)}">${esc(p.name||p.id)}</option>`).join("")}</select>`
+      : `<input id="mpix" placeholder="Pixel ID from Events Manager">
+         <p class="muted" style="margin:-2px 0 8px">We could not list your pixels
+           automatically — paste the ID if you want recovery.</p>`}
+    <button class="act" style="width:100%" onclick="metaSave('${esc(tok)}')">Save</button>
+    ${canRead?`<p class="muted" style="margin:8px 0 0">Meta reports the same sale under
+      several action types. Picking two that overlap double-counts every order.</p>`:""}`;
+}
+
+async function metaSave(tok){
+  const r=await api("/meta/setup",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({shop,token:tok,ad_account_id:$("macc").value,
+      action_type:$("mact").value,pixel_id:$("mpix").value.trim(),
+      capi_enabled:$("mpix").value.trim()?1:0})}).then(r=>r.json());
+  if(r.error){ alert(r.error); return; }
+  refreshMeta();
+}
+
+/* ---------- Plans ---------- */
+async function loadPlans(){
+  const d=await api("/billing/plans?shop="+encodeURIComponent(shop))
+    .then(r=>r.json()).catch(()=>null);
+  if(!d){ $("plans").innerHTML='<div class="card"><p class="muted">—</p></div>'; return; }
+
+  const u=d.usage||{};
+  const over=u.ok===false;
+  const pct=Math.min(100,u.pct||0);
+  const usedTxt = u.unlimited
+    ? String(u.used ?? 0)
+    : `${u.used ?? 0} <span style="font-size:16px;color:var(--dim);font-weight:400">of ${u.limit}</span>`;
+  $("usage").innerHTML=`
+    <h2>This month</h2>
+    <p class="note">Orders counted against your plan</p>
+    <div style="font-size:32px;font-weight:650;margin-bottom:4px">${usedTxt}</div>
+    ${u.unlimited?"":`<div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden">
+      <i style="display:block;height:100%;width:${pct}%;background:${over?"var(--hi)":"var(--ok)"}"></i></div>`}
+    ${u.message?`<p class="muted" style="margin-top:10px;color:var(--mid)">${esc(u.message)}</p>`:""}`;
+
+  // Zvoleny cyklus drzime mimo loadPlans, aby prepnutie neprepisalo volbu
+  // pri kazdom refreshi. Prvotne sa riadi tym, co merchant uz plati.
+  if(planCycle===null) planCycle = d.current_cycle==="annual" ? "annual" : "monthly";
+  renderPlans(d);
+}
+
+let planCycle = null;
+let lastPlans = null;
+
+function setPlanCycle(c){ planCycle=c; if(lastPlans) renderPlans(lastPlans); }
+
+function renderPlans(d){
+  lastPlans = d;
+  const annual = planCycle==="annual";
+  const tab = (id,label)=>`<button class="act ${planCycle===id?"":"ghost"}"
+      style="padding:5px 12px;font-size:12px" onclick="setPlanCycle('${id}')">${label}</button>`;
+
+  $("plans").innerHTML='<div class="card"><h2>Plans</h2>'
+    + '<p class="note">Billed through Shopify · 7-day free trial on paid plans</p>'
+    + `<div style="display:flex;gap:6px;margin:0 0 14px;align-items:center">
+         ${tab("monthly","Monthly")}${tab("annual","Annual")}
+         <span class="muted" style="font-size:12px">2 months free</span>
+       </div>`
+    // align-items:stretch + flex v karte => vsetky karty rovnako vysoke
+    // a tlacidla zarovnane na spodku, bez ohladu na pocet odrazok
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));'
+    + 'gap:12px;align-items:stretch">'
+    + d.plans.map(p=>{
+        // "current" plati len ked sedi plan AJ cyklus — inak by merchantovi
+        // na mesacnom Starteri svietil rocny ako uz aktivny a nemal by ho ako kupit
+        const cur=p.id===d.current && (p.price===0 || planCycle===d.current_cycle);
+        const price = annual ? p.annual_price : p.price;
+        const per = annual ? "/yr" : "/mo";
+        return `<div style="border:1px solid ${cur?"var(--ink)":"var(--line)"};
+                  border-radius:10px;padding:16px;position:relative;
+                  display:flex;flex-direction:column">
+          ${cur?'<span class="tag ok" style="position:absolute;top:12px;right:12px">current</span>':""}
+          <div style="font-weight:600;margin-bottom:2px">${esc(p.name)}</div>
+          <div style="font-size:26px;font-weight:650">
+            ${price?"$"+price:"Free"}${price?`<span style="font-size:13px;color:var(--dim);font-weight:400">${per}</span>`:""}
+          </div>
+          ${annual&&p.annual_saving?`<div class="muted" style="font-size:12px;color:var(--ok)">
+            save $${p.annual_saving}/yr</div>`:""}
+          <div class="muted" style="margin:4px 0 10px">
+            ${p.orders?p.orders.toLocaleString()+" orders/mo":"Unlimited orders"}
+          </div>
+          <ul style="padding-left:16px;margin:0 0 14px;font-size:12px;
+                     color:var(--dim);line-height:1.6;flex:1">
+            ${p.features.map(f=>`<li>${esc(f)}</li>`).join("")}
+          </ul>
+          ${cur?'<button class="act ghost" style="width:100%;margin-top:auto" disabled>Active</button>'
+               :`<button class="act" style="width:100%;margin-top:auto"
+                     onclick="goAuth('/billing/subscribe','plan=${p.id}&cycle=${planCycle}')">
+                     ${price?"Start trial":"Downgrade"}</button>`}
+        </div>`;
+      }).join("")
+    + "</div></div>";
+}
+</script>
+</body>
+</html>

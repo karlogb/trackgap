@@ -1,0 +1,22 @@
+{
+  "name": "trackgap-server",
+  "version": "1.0.0",
+  "description": "TrackGap server: Shopify orders vs GA4/Meta/Google Ads reconciliation",
+  "scripts": {
+    "start": "node --env-file-if-exists=../.env server.mjs",
+    "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
+    "check": "node --check server.mjs"
+  },
+  "author": "Karol Bolgár <karol@nulllogic.eu>",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@shopify/shopify-api": "^14.0.1",
+    "@shopify/shopify-app-react-router": "^2.0.1",
+    "better-sqlite3": "^13.0.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.9"
+  }
+}

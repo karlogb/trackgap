@@ -1,0 +1,15 @@
+# Example Caddy site block. TrackGap listens on loopback only;
+# Caddy terminates TLS and proxies to it.
+trackgap.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:9310
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+	log {
+		output stderr
+		format console
+	}
+}

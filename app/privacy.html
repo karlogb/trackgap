@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TrackGap — Privacy Policy</title>
+<style>
+  body{margin:0;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       color:#1a1c1d;background:#fff}
+  .wrap{max-width:760px;margin:0 auto;padding:48px 20px 80px}
+  h1{font-size:28px;margin:0 0 6px}
+  .sub{color:#6b7177;margin-bottom:36px;font-size:14px}
+  h2{font-size:18px;margin:34px 0 10px}
+  h3{font-size:15px;margin:22px 0 6px}
+  p,li{color:#2b2f33}
+  ul{padding-left:20px}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  td,th{text-align:left;padding:9px;border-bottom:1px solid #e3e5e7;vertical-align:top}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#6b7177;font-weight:500}
+  code{background:#f0f1f3;padding:2px 6px;border-radius:4px;font-size:13px}
+  .box{background:#f6f6f7;border-left:3px solid #0a7d55;padding:14px 18px;
+       border-radius:0 8px 8px 0;margin:20px 0}
+  a{color:#2563eb}
+  footer{margin-top:50px;padding-top:20px;border-top:1px solid #e3e5e7;
+         color:#6b7177;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Privacy Policy</h1>
+  <div class="sub">TrackGap · Last updated 31 August 2026</div>
+
+  <div class="box">
+    <strong>The short version:</strong> TrackGap reads order IDs, amounts and
+    traffic sources so it can tell you which orders your analytics missed.
+    It does not read, store or process your customers' names, email addresses,
+    postal addresses or phone numbers.
+  </div>
+
+  <h2>1. Who we are</h2>
+  <p>TrackGap is operated by <strong>NullLogic s.r.o.</strong>, a company
+  registered in Slovakia. Contact: <a href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a>.</p>
+  <p>For data protection purposes the merchant installing the app is the
+  <strong>data controller</strong>. NullLogic s.r.o. acts as a
+  <strong>data processor</strong> on the merchant's instructions.</p>
+
+  <h2>2. What we collect</h2>
+
+  <h3>2.1 From your Shopify store</h3>
+  <table>
+    <tr><th>Data</th><th>Why</th></tr>
+    <tr><td>Order ID and order number</td><td>To match an order against the conversions recorded by your analytics</td></tr>
+    <tr><td>Order total, subtotal, shipping, tax, currency</td><td>To detect whether the value sent to analytics matches the order</td></tr>
+    <tr><td>Order timestamp</td><td>To respect analytics processing delays</td></tr>
+    <tr><td>Landing page, referrer, UTM parameters</td><td>To show which traffic source loses data</td></tr>
+    <tr><td>Financial status, cancellation flag</td><td>To exclude cancelled orders from comparisons</td></tr>
+  </table>
+
+  <div class="box">
+    <strong>We do not request or store:</strong> customer names, email addresses,
+    postal addresses, phone numbers, payment details or line-item contents.
+    We hold Shopify <em>Protected Customer Data Level 1</em> access only.
+  </div>
+
+  <h3>2.2 From the storefront (web pixel)</h3>
+  <p>Our optional web pixel reads the Google Analytics client identifier from
+  the <code>_ga</code> cookie, and advertising click identifiers
+  (<code>gclid</code>, <code>fbclid</code> and similar) from the page URL.</p>
+  <p>These are pseudonymous browser identifiers, not personal contact details.
+  They exist so that a conversion we send on your behalf is attributed to the
+  correct visit. Without them we do not send anything, because an incorrectly
+  attributed conversion is worse than a missing one.</p>
+
+  <h3>2.3 From connected platforms</h3>
+  <p>If you connect them, we read — <strong>read-only</strong> — aggregate
+  conversion counts and values from Google Analytics 4 and Meta.
+  We never modify your campaigns, budgets or settings.</p>
+
+  <h3>2.4 Website analytics</h3>
+  <p>On our public product website, Google Analytics 4 helps us understand
+  aggregate page usage. Analytics storage is disabled by default and enabled
+  only if you accept analytics in the consent prompt. Your choice is stored in
+  your browser and can be reset by clearing this site's local storage.</p>
+
+  <h2>3. What we do with it</h2>
+  <ul>
+    <li>Compare your orders against the conversions your platforms recorded.</li>
+    <li>Show you which orders are missing, duplicated, or valued differently.</li>
+    <li>Optionally send missing conversions back to your analytics or ad
+        platform on your behalf, using your own credentials.</li>
+    <li>Email you when tracking breaks, if you enable alerts.</li>
+  </ul>
+  <p>We do not sell data, share it with third parties for their own purposes,
+  use it to train models, or combine data across merchants.</p>
+
+  <h2>4. Consent</h2>
+  <p>We do not send conversions for visitors who declined consent. This is a
+  hard rule in the product, not a setting. Orders that cannot be recovered for
+  this reason are reported to you with the reason stated.</p>
+
+  <h2>5. Where data is stored</h2>
+  <p>Data is stored on a dedicated server in the European Union. Access
+  credentials and API tokens are encrypted at rest using AES-256-GCM.
+  Transport is TLS-encrypted throughout.</p>
+
+  <h2>6. How long we keep it</h2>
+  <table>
+    <tr><th>Data</th><th>Retention</th></tr>
+    <tr><td>Order records</td><td>Rolling 90 days</td></tr>
+    <tr><td>Browser identifiers</td><td>30 days</td></tr>
+    <tr><td>Findings and check history</td><td>12 months</td></tr>
+    <tr><td>Everything</td><td>Deleted within 48 hours of uninstall</td></tr>
+  </table>
+
+  <h2>7. Your rights</h2>
+  <p>Under GDPR you may request access, correction, deletion, restriction or
+  portability of personal data, and you may object to processing. Because we do
+  not store customer contact details, most requests are satisfied by confirming
+  that no such data exists.</p>
+  <p>We honour Shopify's mandatory compliance webhooks
+  (<code>customers/data_request</code>, <code>customers/redact</code>,
+  <code>shop/redact</code>) automatically.</p>
+  <p>Requests: <a href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a>.
+  You also have the right to lodge a complaint with the Slovak Data Protection
+  Authority (Úrad na ochranu osobných údajov SR).</p>
+
+  <h2>8. Sub-processors</h2>
+  <table>
+    <tr><th>Provider</th><th>Purpose</th></tr>
+    <tr><td>Hetzner Online GmbH (Germany)</td><td>Server hosting</td></tr>
+    <tr><td>Shopify Inc.</td><td>Order data source, billing</td></tr>
+    <tr><td>Google LLC</td><td>Analytics and Ads APIs — only if you connect them</td></tr>
+    <tr><td>Google Ireland Limited</td><td>Public website analytics — only with consent</td></tr>
+    <tr><td>Meta Platforms Inc.</td><td>Conversions API — only if you connect it</td></tr>
+  </table>
+
+  <h2>9. Security</h2>
+  <ul>
+    <li>All traffic over HTTPS.</li>
+    <li>Webhook payloads verified by HMAC signature; unsigned requests rejected.</li>
+    <li>Tokens encrypted at rest, never written to logs.</li>
+    <li>Data minimisation by design: fields we do not need are not requested.</li>
+  </ul>
+
+  <h2>10. Changes</h2>
+  <p>Material changes will be announced in the app at least 14 days before they
+  take effect.</p>
+
+  <footer>
+    NullLogic s.r.o. · Slovakia ·
+    <a href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a><br>
+    TrackGap — <a href="https://trackgap.example.com">trackgap.example.com</a>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TrackGap — find the orders your analytics never saw</title>
+<meta name="description" content="TrackGap compares your Shopify orders against what actually reached GA4 and Meta. It names the missing orders, tells you why, and can send them back.">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+<link rel="canonical" href="https://trackgap.example.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="TrackGap">
+<meta property="og:url" content="https://trackgap.example.com/">
+<meta property="og:title" content="TrackGap — find the orders your analytics never saw">
+<meta property="og:description" content="Your store says 100 orders. GA4 says 82. TrackGap tells you which ones are missing, what they were worth, and why.">
+<meta property="og:image" content="https://trackgap.example.com/assets/shot-overview.png">
+<meta property="og:image:width" content="2560">
+<meta property="og:image:height" content="1440">
+<meta property="og:image:alt" content="TrackGap dashboard comparing Shopify orders with GA4 transactions">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="TrackGap — find the orders your analytics never saw">
+<meta name="twitter:description" content="Your store says 100 orders. GA4 says 82. TrackGap tells you which ones are missing, what they were worth, and why.">
+<meta name="twitter:image" content="https://trackgap.example.com/assets/shot-overview.png">
+<link rel="icon" href="/assets/favicon.ico">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- prevzate z /v2: strukturovane data pre rich results (app + FAQ) -->
+<script type="application/ld+json">
+{
+  "@context":"https://schema.org",
+  "@graph":[
+    {
+      "@type":"SoftwareApplication",
+      "@id":"https://trackgap.example.com/#app",
+      "name":"TrackGap",
+      "url":"https://trackgap.example.com/",
+      "applicationCategory":"BusinessApplication",
+      "applicationSubCategory":"Ecommerce analytics",
+      "operatingSystem":"Web",
+      "description":"TrackGap compares Shopify orders with GA4 and Meta, explains tracking gaps, and safely recovers eligible missing conversions.",
+      "image":"https://trackgap.example.com/assets/shot-overview.png",
+      "offers":[
+        {"@type":"Offer","name":"Free","price":"0","priceCurrency":"USD"},
+        {"@type":"Offer","name":"Starter","price":"19","priceCurrency":"USD"},
+        {"@type":"Offer","name":"Growth","price":"49","priceCurrency":"USD"},
+        {"@type":"Offer","name":"Pro","price":"99","priceCurrency":"USD"}
+      ],
+      "provider":{"@id":"https://trackgap.example.com/#organization"}
+    },
+    {
+      "@type":"Organization",
+      "@id":"https://trackgap.example.com/#organization",
+      "name":"NullLogic s.r.o.",
+      "url":"https://nulllogic.eu/",
+      "email":"karol@nulllogic.eu",
+      "logo":"https://trackgap.example.com/assets/icon-512.png"
+    },
+    {
+      "@type":"FAQPage",
+      "@id":"https://trackgap.example.com/#faq",
+      "mainEntity":[
+        {"@type":"Question","name":"Why do Shopify orders and GA4 transactions not match?","acceptedAnswer":{"@type":"Answer","text":"Common causes include declined analytics consent, blocked or broken purchase tags, duplicate events, processing delays, and order values sent without shipping or tax. TrackGap matches orders by ID so these causes can be separated."}},
+        {"@type":"Question","name":"Does TrackGap modify my Shopify theme?","acceptedAnswer":{"@type":"Answer","text":"No. TrackGap uses official Shopify APIs and a Shopify web pixel extension. There is no theme code for the merchant to install or maintain."}},
+        {"@type":"Question","name":"Can TrackGap recover missing GA4 conversions?","acceptedAnswer":{"@type":"Answer","text":"Yes, when the visitor granted the required consent and a valid GA4 client identifier is available. TrackGap does not send conversions when consent is declined or cannot be demonstrated."}},
+        {"@type":"Question","name":"What customer data does TrackGap store?","acceptedAnswer":{"@type":"Answer","text":"TrackGap does not request customer names, email addresses, postal addresses, phone numbers, or payment details. It uses order IDs, values, timestamps, traffic sources, and pseudonymous analytics identifiers needed for reconciliation."}}
+      ]
+    }
+  ]
+}
+</script>
+<!-- Google tag: placeholder GA4 ID, nastav vlastny. Consent defaultne denied. -->
+<script>
+window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}
+gtag('consent','default',{analytics_storage:'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied',wait_for_update:500});
+gtag('js',new Date());gtag('config','G-XXXXXXXXXX',{anonymize_ip:true});
+</script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<style>
+  :root{
+    --bg:#0a0f0e; --bg2:#0d1513; --card:#101a17; --card2:#12201c;
+    --line:rgba(255,255,255,.075); --line2:rgba(255,255,255,.13);
+    --ink:#eef4f2; --dim:#8fa39d; --faint:#5c6f69;
+    --teal:#2fd6a8; --teal-dim:#1d8f8a; --deep:#0f5c4a;
+    --amber:#f2c14e; --red:#ff7a63;
+    --disp:"Space Grotesk",-apple-system,sans-serif;
+    --body:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;font:16px/1.65 var(--body);color:var(--ink);background:var(--bg);
+       -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(47,214,168,.25)}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+  h1,h2,h3{font-family:var(--disp)}
+  img{max-width:100%}
+
+  /* ---------- nav ---------- */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+      -webkit-backdrop-filter:blur(14px);background:rgba(10,15,14,.72);
+      border-bottom:1px solid var(--line)}
+  .navin{display:flex;align-items:center;justify-content:space-between;
+         height:64px}
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--disp);
+        font-weight:600;font-size:17.5px;letter-spacing:-.2px;color:var(--ink);
+        text-decoration:none}
+  .logo img{border-radius:7px;display:block}
+  .navlinks{display:flex;align-items:center;gap:26px}
+  .navlinks a{color:var(--dim);text-decoration:none;font-size:14px;
+              transition:color .15s}
+  .navlinks a:hover{color:var(--ink)}
+  .navlinks a.cta{color:#06231b;background:var(--teal);padding:9px 16px;
+                  border-radius:9px;font-weight:600;transition:transform .15s,box-shadow .15s}
+  .navlinks a.cta:hover{transform:translateY(-1px);
+                        box-shadow:0 6px 22px rgba(47,214,168,.35)}
+  @media(max-width:760px){.navlinks a:not(.cta){display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{position:relative;padding:96px 0 90px;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;
+    background:
+      radial-gradient(900px 480px at 18% -10%,rgba(29,143,138,.28),transparent 62%),
+      radial-gradient(700px 420px at 88% 8%,rgba(15,92,74,.35),transparent 60%);
+    pointer-events:none}
+  .hero::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),
+                     linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:56px 56px;
+    -webkit-mask-image:radial-gradient(720px 460px at 50% 0,#000 30%,transparent 75%);
+            mask-image:radial-gradient(720px 460px at 50% 0,#000 30%,transparent 75%)}
+  .hero .wrap{position:relative;z-index:1;display:grid;
+              grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+  @media(max-width:920px){.hero .wrap{grid-template-columns:1fr;gap:44px}
+    .hero{padding:64px 0 70px}}
+  .kicker{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);
+          font-size:12.5px;letter-spacing:.4px;color:var(--teal);
+          border:1px solid rgba(47,214,168,.35);background:rgba(47,214,168,.08);
+          padding:6px 12px;border-radius:99px;margin-bottom:22px}
+  .kicker i{width:7px;height:7px;border-radius:50%;background:var(--teal);
+            box-shadow:0 0 10px var(--teal);display:inline-block;
+            animation:pulse 2.2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .hero h1{font-size:clamp(36px,5.2vw,58px);line-height:1.06;margin:0 0 20px;
+           font-weight:700;letter-spacing:-1.5px}
+  .hero h1 .ok{color:var(--ink)}
+  .hero h1 .bad{background:linear-gradient(100deg,var(--teal),#7fe8c9);
+                -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.lead{font-size:18px;color:var(--dim);max-width:520px;margin:0 0 32px}
+  .acts{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .btn{display:inline-block;text-decoration:none;font-weight:600;font-size:15.5px;
+       padding:14px 26px;border-radius:11px;transition:transform .15s,box-shadow .15s}
+  .btn.primary{background:var(--teal);color:#06231b;
+               box-shadow:0 8px 30px rgba(47,214,168,.25)}
+  .btn.primary:hover{transform:translateY(-2px);
+                     box-shadow:0 12px 38px rgba(47,214,168,.4)}
+  .btn.ghost{color:var(--ink);border:1px solid var(--line2)}
+  .btn.ghost:hover{border-color:rgba(255,255,255,.3)}
+  .hero small{display:block;margin-top:20px;color:var(--faint);font-size:13.5px}
+
+  /* ---------- hero terminal ---------- */
+  .term{background:linear-gradient(180deg,var(--card2),var(--card));
+        border:1px solid var(--line2);border-radius:16px;overflow:hidden;
+        box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(47,214,168,.06),
+                   0 0 90px rgba(29,143,138,.14);
+        font-family:var(--mono);font-size:13px}
+  .term .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;
+             border-bottom:1px solid var(--line)}
+  .term .bar b{font-weight:500;color:var(--dim);font-size:12px;margin-left:6px;
+               letter-spacing:.3px}
+  .dot{width:10px;height:10px;border-radius:50%;background:#2a3833}
+  .term .sum{display:flex;gap:0;border-bottom:1px solid var(--line)}
+  .term .sum div{flex:1;padding:14px 16px;border-right:1px solid var(--line)}
+  .term .sum div:last-child{border-right:0}
+  .term .sum span{display:block;font-size:10.5px;letter-spacing:.6px;
+                  text-transform:uppercase;color:var(--faint);margin-bottom:3px}
+  .term .sum b{font-size:22px;font-weight:600;color:var(--ink)}
+  .term .sum .m b{color:var(--red)}
+  .term .rows{padding:6px 0 10px}
+  .trow{display:flex;align-items:center;gap:14px;padding:8px 18px;
+        opacity:0;transform:translateY(6px);animation:rin .45s forwards}
+  @keyframes rin{to{opacity:1;transform:none}}
+  .trow .id{color:var(--dim);width:72px}
+  .trow .val{width:84px;color:var(--ink)}
+  .trow .src{flex:1;color:var(--faint);overflow:hidden;text-overflow:ellipsis;
+             white-space:nowrap}
+  .tag{font-size:11px;padding:3px 9px;border-radius:6px;font-weight:500;
+       white-space:nowrap}
+  .tag.ok{color:var(--teal);background:rgba(47,214,168,.1)}
+  .tag.miss{color:var(--red);background:rgba(255,122,99,.12)}
+  .tag.rec{color:var(--amber);background:rgba(242,193,78,.12)}
+  .trow:nth-child(1){animation-delay:.30s}
+  .trow:nth-child(2){animation-delay:.55s}
+  .trow:nth-child(3){animation-delay:.80s}
+  .trow:nth-child(4){animation-delay:1.05s}
+  .trow:nth-child(5){animation-delay:1.30s}
+  .trow:nth-child(6){animation-delay:1.55s}
+  .term .foot{border-top:1px solid var(--line);padding:12px 18px;
+              color:var(--teal);font-size:12.5px;opacity:0;
+              animation:rin .5s 2s forwards}
+  @media(prefers-reduced-motion:reduce){
+    .trow,.term .foot{animation:none;opacity:1;transform:none}
+    .kicker i{animation:none}}
+
+  /* ---------- sections ---------- */
+  section{padding:88px 0;border-top:1px solid var(--line)}
+  section.alt{background:var(--bg2)}
+  h2{font-size:clamp(26px,3.4vw,36px);margin:0 0 12px;font-weight:700;
+     letter-spacing:-.8px}
+  .sub{color:var(--dim);margin:0 0 42px;font-size:16.5px;max-width:640px}
+  .rev{opacity:0;transform:translateY(18px);
+       transition:opacity .6s ease,transform .6s ease}
+  .rev.in{opacity:1;transform:none}
+  @media(prefers-reduced-motion:reduce){.rev{opacity:1;transform:none;transition:none}}
+
+  /* screenshot */
+  .shotwrap{position:relative;border-radius:18px;padding:10px;
+    background:linear-gradient(160deg,rgba(47,214,168,.35),rgba(29,143,138,.08) 40%,rgba(255,255,255,.05));
+    box-shadow:0 40px 110px rgba(0,0,0,.5)}
+  .shotwrap img{display:block;width:100%;height:auto;border-radius:10px}
+  .cap{font-size:13.5px;color:var(--faint);margin:16px 0 0;text-align:center}
+
+  /* quotes */
+  .quotes{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .q{background:var(--card);border:1px solid var(--line);border-radius:14px;
+     padding:24px;position:relative}
+  .q::before{content:"“";position:absolute;top:8px;right:18px;font-family:var(--disp);
+             font-size:56px;color:rgba(47,214,168,.16);line-height:1}
+  .q p{margin:0 0 14px;font-size:15px;color:#c8d4d0}
+  .q span{font-family:var(--mono);font-size:11.5px;color:var(--faint);
+          letter-spacing:.3px}
+
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:26px 22px;transition:border-color .2s,transform .2s}
+  .step:hover{border-color:rgba(47,214,168,.35);transform:translateY(-3px)}
+  .step .n{font-family:var(--mono);font-size:12px;color:var(--teal);
+           letter-spacing:1px;margin-bottom:14px}
+  .step h3{font-size:17px;margin:0 0 8px;font-weight:600;letter-spacing:-.2px}
+  .step p{font-size:14px;color:var(--dim);margin:0}
+
+  /* compare table */
+  .tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px;
+       background:var(--card)}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:560px}
+  th,td{text-align:left;padding:14px 18px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  th{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+     letter-spacing:.8px;color:var(--faint);font-weight:500}
+  th:not(:first-child),td:not(:first-child){text-align:center}
+  td.y{color:var(--teal);font-weight:600}
+  td.n{color:var(--faint)}
+  td:first-child{color:var(--dim)}
+
+  /* pricing */
+  .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+  .plan{background:var(--card);border:1px solid var(--line);border-radius:16px;
+        padding:26px 24px;display:flex;flex-direction:column;position:relative}
+  .plan.hot{border-color:rgba(47,214,168,.5);
+            background:linear-gradient(180deg,rgba(47,214,168,.07),var(--card) 55%)}
+  .plan .badge{position:absolute;top:-11px;left:22px;background:var(--teal);
+               color:#06231b;font-size:11px;font-weight:700;letter-spacing:.5px;
+               padding:4px 11px;border-radius:99px;text-transform:uppercase}
+  .plan .nm{font-family:var(--disp);font-weight:600;font-size:16px}
+  .plan .pr{font-family:var(--disp);font-size:38px;font-weight:700;
+            letter-spacing:-1.5px;margin:6px 0 2px}
+  .plan .pr small{font-size:14px;color:var(--dim);font-weight:400;letter-spacing:0}
+  .plan .li{font-family:var(--mono);color:var(--faint);font-size:12px;
+            margin-bottom:18px;letter-spacing:.2px}
+  .plan ul{padding:0;margin:0 0 8px;list-style:none;font-size:14px;color:var(--dim)}
+  .plan li{padding:5px 0 5px 24px;position:relative}
+  .plan li::before{content:"✓";position:absolute;left:2px;color:var(--teal);
+                   font-weight:700;font-size:12px}
+  .trialnote{font-family:var(--mono);font-size:12px;color:var(--faint);
+             margin-top:22px;text-align:center;letter-spacing:.2px}
+
+  /* founder */
+  .founder{max-width:720px}
+  .founder p{color:#b9c6c1;font-size:16.5px;margin:0 0 18px}
+  .founder .sig{color:var(--faint);font-family:var(--mono);font-size:13.5px;
+                margin-top:26px}
+  .founder .hl{color:var(--ink)}
+
+  /* upsell */
+  .upsell{background:var(--card);border:1px solid var(--line);border-radius:18px;
+          padding:36px;display:flex;gap:30px;align-items:center;flex-wrap:wrap}
+  .upsell div{flex:1;min-width:280px}
+  .upsell h3{margin:0 0 8px;font-size:21px;letter-spacing:-.3px}
+  .upsell p{margin:0 0 4px;color:var(--dim);font-size:15px}
+
+  /* final CTA */
+  .final{position:relative;text-align:center;padding:110px 0;overflow:hidden;
+         border-top:1px solid var(--line)}
+  .final::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(640px 380px at 50% 110%,rgba(29,143,138,.32),transparent 70%)}
+  .final .wrap{position:relative}
+  .final h2{font-size:clamp(30px,4.4vw,46px);letter-spacing:-1.2px;margin-bottom:14px}
+  .final p{color:var(--dim);max-width:520px;margin:0 auto 32px;font-size:17px}
+
+  footer{padding:36px 0 56px;color:var(--faint);font-size:13.5px;
+         border-top:1px solid var(--line);display:block}
+  footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+  footer a{color:var(--dim);margin-right:18px;text-decoration:none}
+  footer a:hover{color:var(--ink)}
+  /* --- prevzate z /v2: trust line + rovnica 100-82=18 --- */
+  .trust{padding:20px 0 0}
+  .trustline{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+             padding:20px 0;display:flex;align-items:center;justify-content:center;
+             gap:34px;flex-wrap:wrap;color:var(--dim);font-size:13px}
+  .trustline b{color:var(--ink);font-weight:600}
+  .trustline span{display:flex;align-items:center;gap:8px}
+  .trustline i{width:7px;height:7px;background:var(--teal);border-radius:50%;flex:none}
+
+  .equation{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:16px;
+            align-items:center;margin-top:26px}
+  .metric{background:var(--card);border:1px solid var(--line2);border-radius:16px;
+          padding:24px;text-align:center}
+  .metric span{display:block;color:var(--dim);font-size:13px;margin-bottom:8px}
+  .metric b{font-size:42px;font-weight:700;line-height:1;letter-spacing:-1px}
+  .metric.bad b{color:var(--red)}
+  .metric.good b{color:var(--teal)}
+  .op{font-size:24px;color:var(--faint);text-align:center}
+
+  .causes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+  .cause{padding:18px 20px;border:1px solid var(--line);border-radius:13px;
+         color:var(--dim);font-size:14px;line-height:1.55}
+  .cause b{display:block;color:var(--ink);margin-bottom:5px;font-weight:600}
+
+  @media(max-width:760px){
+    .equation{grid-template-columns:1fr;gap:10px}
+    .op{display:none}
+    .causes{grid-template-columns:1fr}
+  }
+  /* --- setup pasik (prevzate z /v2) --- */
+  .setup{margin-top:38px;padding-top:30px;border-top:1px solid var(--line)}
+  .setuphead{font-size:13px;letter-spacing:.08em;text-transform:uppercase;
+             color:var(--teal);margin-bottom:18px}
+  .stepgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .sstep{display:flex;flex-direction:column;gap:6px}
+  .sstep .round{width:30px;height:30px;border-radius:50%;display:flex;
+                align-items:center;justify-content:center;font-size:14px;
+                font-weight:600;background:var(--card2);border:1px solid var(--line2);
+                color:var(--teal);margin-bottom:4px}
+  .sstep b{color:var(--ink);font-weight:600;font-size:15px}
+  .sstep span{color:var(--dim);font-size:13.5px;line-height:1.55}
+  @media(max-width:760px){.stepgrid{grid-template-columns:1fr}}
+
+  /* --- prevzate z /v2: dalsie dva screenshoty produktu --- */
+  .shots2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+  .shotcard{background:var(--card);border:1px solid var(--line);border-radius:14px;
+            overflow:hidden}
+  .shotcard img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;
+                object-position:left top;border-bottom:1px solid var(--line)}
+  .shotcard div{padding:16px 20px}
+  .shotcard b{display:block;color:var(--ink);font-weight:600;font-size:15px;
+              margin-bottom:4px}
+  .shotcard span{color:var(--dim);font-size:13.5px;line-height:1.55}
+  @media(max-width:760px){.shots2{grid-template-columns:1fr}}
+
+  /* --- prevzate z /v2: FAQ --- */
+  .faqs{max-width:820px}
+  .faqs details{border-top:1px solid var(--line);padding:20px 0}
+  .faqs details:last-child{border-bottom:1px solid var(--line)}
+  .faqs summary{cursor:pointer;list-style:none;font-family:var(--disp);
+                font-weight:600;font-size:17px;padding-right:35px;position:relative}
+  .faqs summary::-webkit-details-marker{display:none}
+  .faqs summary::after{content:"+";position:absolute;right:3px;top:-5px;
+                       color:var(--teal);font-size:24px;font-weight:400}
+  .faqs details[open] summary::after{content:"−"}
+  .faqs details p{color:var(--dim);font-size:14.5px;margin:12px 45px 2px 0}
+
+  /* --- prevzate z /v2: consent lista pre GA4 --- */
+  .consent{position:fixed;z-index:60;left:18px;right:18px;bottom:18px;
+           max-width:650px;margin:auto;background:var(--card2);
+           border:1px solid var(--line2);border-radius:14px;padding:18px;
+           box-shadow:0 18px 60px rgba(0,0,0,.6);display:none;
+           align-items:center;gap:18px}
+  .consent.show{display:flex}
+  .consent p{font-size:13px;line-height:1.45;color:var(--dim);margin:0;flex:1}
+  .consent p a{color:var(--teal)}
+  .consent-actions{display:flex;gap:8px}
+  .consent button{border:1px solid var(--line2);background:transparent;
+                  color:var(--ink);padding:9px 13px;border-radius:8px;
+                  font:600 12px var(--body);cursor:pointer}
+  .consent button.accept{background:var(--teal);color:#06231b;border-color:var(--teal)}
+  @media(max-width:600px){.consent{flex-direction:column;align-items:stretch}
+    .consent-actions{width:100%}.consent-actions button{flex:1}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap navin">
+    <a class="logo" href="/">
+      <img src="/assets/icon-64.png" alt="" width="28" height="28"> TrackGap
+    </a>
+    <div class="navlinks">
+      <a href="#how">How it works</a>
+      <a href="#different">Why TrackGap</a>
+      <a href="#pricing">Pricing</a>
+      <a class="cta" href="https://apps.shopify.com/trackgap">Install on Shopify</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <span class="kicker"><i></i>CHECKS RUN DAILY · ALERTS THE DAY IT BREAKS</span>
+      <h1><span class="ok">Your store says<br>100 orders.</span><br>
+          <span class="bad">GA4 says 82.</span></h1>
+      <p class="lead">
+        Somewhere between the sale and your analytics, orders go missing.
+        TrackGap tells you which ones, what they were worth, and whether it is
+        actually broken — or just someone declining cookies.
+      </p>
+      <div class="acts">
+        <a class="btn primary" href="https://apps.shopify.com/trackgap">Install on Shopify</a>
+        <a class="btn ghost" href="#how">See how it works</a>
+      </div>
+      <small>Free plan · Read-only access · Nothing to add to your theme</small>
+    </div>
+
+    <div class="term" aria-hidden="true">
+      <div class="bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <b>trackgap · reconcile — last 30 days</b>
+      </div>
+      <div class="sum">
+        <div><span>Shopify</span><b data-count="100">0</b></div>
+        <div><span>GA4</span><b data-count="82">0</b></div>
+        <div class="m"><span>Missing</span><b data-count="18">0</b></div>
+      </div>
+      <div class="rows">
+        <div class="trow"><span class="id">#11296</span><span class="val">€120.40</span><span class="src">google / cpc</span><span class="tag ok">tracked</span></div>
+        <div class="trow"><span class="id">#11297</span><span class="val">€64.90</span><span class="src">facebook / paid</span><span class="tag ok">tracked</span></div>
+        <div class="trow"><span class="id">#11299</span><span class="val">€33.67</span><span class="src">google / cpc</span><span class="tag miss">missing</span></div>
+        <div class="trow"><span class="id">#11300</span><span class="val">€89.00</span><span class="src">newsletter / email</span><span class="tag ok">tracked</span></div>
+        <div class="trow"><span class="id">#11304</span><span class="val">€215.50</span><span class="src">google / organic</span><span class="tag rec">recovered ↩</span></div>
+        <div class="trow"><span class="id">#11307</span><span class="val">€41.20</span><span class="src">(direct)</span><span class="tag miss">consent ✕</span></div>
+      </div>
+      <div class="foot">✓ 1 conversion sent back to GA4 with its original source</div>
+    </div>
+  </div>
+</header>
+
+<!-- prevzate z /v2: kratke uistenie hned pod hero, kym ma navstevnik pozornost -->
+<div class="trust">
+  <div class="wrap trustline">
+    <b>Your store data stays yours.</b>
+    <span><i></i>No customer contact details</span>
+    <span><i></i>Tokens encrypted at rest</span>
+    <span><i></i>Billed by Shopify</span>
+  </div>
+</div>
+
+<!-- prevzate z /v2: produkt vysvetleny tromi cislami skor nez textom -->
+<section id="equation">
+  <div class="wrap rev">
+    <h2>Shopify knows what sold.<br>GA4 knows what it saw.</h2>
+    <p class="sub">TrackGap sits between those two numbers and shows you exactly
+      where they stopped matching — and which part of the gap is worth fixing.</p>
+    <div class="equation">
+      <div class="metric"><span>Shopify orders</span><b>100</b></div>
+      <div class="op">−</div>
+      <div class="metric bad"><span>GA4 transactions</span><b>82</b></div>
+      <div class="op">=</div>
+      <div class="metric good"><span>Orders to explain</span><b>18</b></div>
+    </div>
+    <div class="causes">
+      <div class="cause"><b>Actual tracking failure</b>Something broke and needs attention.</div>
+      <div class="cause"><b>Declined consent</b>Expected loss that should not be “fixed”.</div>
+      <div class="cause"><b>Wrong value or duplicate</b>The event arrived, but the number is misleading.</div>
+    </div>
+  </div>
+</section>
+
+<section id="product">
+  <div class="wrap rev">
+    <h2>One screen. The whole answer.</h2>
+    <p class="sub">The big number is the share of orders that never reached your
+      analytics. Under it, the same gap split by cause — because half of it is
+      usually consent, and that part you cannot fix.</p>
+    <div class="shotwrap"><img src="/assets/shot-overview.png"
+      alt="TrackGap dashboard showing 7.9% of conversions untracked" loading="lazy"></div>
+    <p class="cap">The revenue figure is the sum of the missing orders as your
+      store recorded them — not an estimate from ad spend you typed in.</p>
+
+    <!-- prevzate z /v2: recovery a monitoring, nie len overview -->
+    <div class="shots2">
+      <div class="shotcard">
+        <img src="/assets/shot-2-recovery.png" alt="TrackGap conversion recovery report" loading="lazy">
+        <div><b>Recover eligible conversions</b>
+        <span>When consent and attribution identifiers exist, the purchase goes
+          back to GA4 with its original source.</span></div>
+      </div>
+      <div class="shotcard">
+        <img src="/assets/shot-2-recovery.png" alt="TrackGap findings — untracked orders listed by number" loading="lazy">
+        <div><b>Find out the day it breaks</b>
+        <span>Daily checks and email alerts turn silent reporting drift into a
+          problem you can act on while it is fresh.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="problem" class="alt">
+  <div class="wrap rev">
+    <h2>It is not just you</h2>
+    <p class="sub">Posts from the Shopify Community forum. There are over a
+      hundred threads like these.</p>
+    <div class="quotes">
+      <div class="q">
+        <p>Each week is so different — about 10&nbsp;–&nbsp;20% of orders are missing.
+          Asked Shopify support but they say it's a problem with Google.</p>
+        <span>community.shopify.com</span>
+      </div>
+      <div class="q">
+        <p>Last year we sold 348 of a specific product, but in GA4 it's only
+          saying that we sold 54.</p>
+        <span>community.shopify.com</span>
+      </div>
+      <div class="q">
+        <p>Actual orders: 2,961. Thank-you page views in GA4: 1,129.
+          That's a gap of nearly 3×.</p>
+        <span>community.shopify.com</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap rev">
+    <h2>How it works</h2>
+    <p class="sub">Install it, connect GA4, done. Nothing goes into your theme.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">STEP 01</div>
+        <h3>Reads your orders</h3>
+        <p>Straight from Shopify, server-side. Adblockers and consent banners
+          cannot touch this one.</p>
+      </div>
+      <div class="step">
+        <div class="n">STEP 02</div>
+        <h3>Checks what arrived</h3>
+        <p>Pulls the transactions GA4 actually recorded and matches them by
+          order ID, one at a time.</p>
+      </div>
+      <div class="step">
+        <div class="n">STEP 03</div>
+        <h3>Works out why</h3>
+        <p>Broken tag, declined consent, duplicate events, or a value sent
+          without shipping. These are very different problems.</p>
+      </div>
+      <div class="step">
+        <div class="n">STEP 04</div>
+        <h3>Sends them back</h3>
+        <p>Where there is consent and an identifier, the missing conversion
+          goes back to GA4 with its original source. Where there is not, we
+          say so instead.</p>
+      </div>
+    </div>
+
+    <!-- prevzate z /v2: odpoved na "je to zlozite nasadit?" -->
+    <div class="setup">
+      <div class="setuphead">Setting it up takes minutes</div>
+      <div class="stepgrid">
+        <div class="sstep"><div class="round">1</div>
+          <b>Install from Shopify</b>
+          <span>Approve order and pixel permissions in the standard flow.</span></div>
+        <div class="sstep"><div class="round">2</div>
+          <b>Connect GA4</b>
+          <span>Pick the property. Your credentials stay encrypted.</span></div>
+        <div class="sstep"><div class="round">3</div>
+          <b>Get the first comparison</b>
+          <span>Real order IDs matched, then checked on your plan's schedule.</span></div>
+      </div>
+      <p class="cap">Official Shopify and Google APIs. No theme code to paste
+        or maintain.</p>
+    </div>
+  </div>
+</section>
+
+<section id="different" class="alt">
+  <div class="wrap rev">
+    <h2>Not another audit tool</h2>
+    <p class="sub">Audit tools load your site and check whether the tag fires.
+      That is useful — and it is not the same question.</p>
+    <div class="tbl">
+      <table>
+        <tr><th>&nbsp;</th><th>Audit tools</th><th>TrackGap</th></tr>
+        <tr><td>Confirms the tag fires</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Simulates a visit to test the funnel</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td>Validates your data layer schema</td><td class="y">Yes</td><td class="n">No</td></tr>
+        <tr><td>Matches every real order by ID</td><td class="n">No</td><td class="y">Yes</td></tr>
+        <tr><td>Reads GA4 and Meta directly</td><td class="n">No</td><td class="y">Yes</td></tr>
+        <tr><td>Separates consent from actual bugs</td><td class="n">No</td><td class="y">Yes</td></tr>
+        <tr><td>Restores missing conversions</td><td class="n">No</td><td class="y">Yes</td></tr>
+      </table>
+    </div>
+    <p class="cap">If you need to know whether your tracking plan is correctly
+      implemented, use an audit tool. If you need to know whether yesterday's
+      orders arrived — that is this.</p>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap rev">
+    <h2>Pricing</h2>
+    <p class="sub">Billed through Shopify, on the invoice you already get.
+      The limit is monthly orders — going over it does not stop the checks,
+      we just tell you.</p>
+    <div class="plans">
+      <div class="plan">
+        <div class="nm">Free</div><div class="pr">$0</div>
+        <div class="li">300 orders / mo</div>
+        <ul><li>Weekly check</li><li>GA4 comparison</li><li>Missing order list</li></ul>
+      </div>
+      <div class="plan hot">
+        <div class="badge">Popular</div>
+        <div class="nm">Starter</div><div class="pr">$19<small>/mo</small></div>
+        <div class="li">2,000 orders / mo</div>
+        <ul><li>Daily checks</li><li>Email alerts</li><li>Conversion recovery</li></ul>
+      </div>
+      <div class="plan">
+        <div class="nm">Growth</div><div class="pr">$49<small>/mo</small></div>
+        <div class="li">10,000 orders / mo</div>
+        <ul><li>Everything in Starter</li><li>Meta comparison</li><li>90-day history</li></ul>
+      </div>
+      <div class="plan">
+        <div class="nm">Pro</div><div class="pr">$99<small>/mo</small></div>
+        <div class="li">Unlimited orders</div>
+        <ul><li>Everything in Growth</li><li>Unlimited orders</li><li>Priority support</li></ul>
+      </div>
+    </div>
+    <p class="trialnote">All paid plans start with a 7-day free trial.</p>
+  </div>
+</section>
+
+<section id="why" class="alt">
+  <div class="wrap rev founder">
+    <h2>Why this exists</h2>
+    <p>
+      I run measurement for around eighty e-commerce stores. The same thing
+      kept happening: a client's numbers stopped matching, and finding out why
+      meant exporting orders, pulling GA4 transactions and diffing them in a
+      spreadsheet — every time, by hand.
+    </p>
+    <p>
+      One store had been sending every purchase to GA4 twice since April.
+      <span class="hl">Revenue looked 13,000&nbsp;€ higher than it was, and
+      nobody noticed for four months.</span> Another had a conversion action in
+      Google Ads that recorded nothing for 38 days straight while the store
+      kept selling.
+    </p>
+    <p>
+      Neither was hard to find once you knew to look. That is the whole point
+      of this app: <span class="hl">it looks, every day, so you do not
+      have to.</span>
+    </p>
+    <p class="sig">— Karol Bolgár, NullLogic</p>
+  </div>
+</section>
+
+<section id="help" style="border-top:0;padding-top:0" class="alt">
+  <div class="wrap rev">
+    <div class="upsell">
+      <div>
+        <h3>Rather not fix it yourself?</h3>
+        <p>TrackGap finds the problem. Fixing it usually means going into GTM,
+          consent mode or server-side tagging — which is what I do for a living.</p>
+        <p>Same person who built this app. No sales call, just email me.</p>
+      </div>
+      <a class="btn ghost" href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a>
+    </div>
+  </div>
+</section>
+
+<!-- prevzate z /v2: FAQ — musi sediet s FAQPage JSON-LD v hlavicke -->
+<section id="faq">
+  <div class="wrap rev">
+    <h2>Shopify tracking gaps, explained</h2>
+    <p class="sub">The questions merchants ask before installing.</p>
+    <div class="faqs">
+      <details>
+        <summary>Why do Shopify orders and GA4 transactions not match?</summary>
+        <p>Common causes include declined analytics consent, blocked or broken
+          purchase tags, duplicate events, processing delays, and order values
+          sent without shipping or tax. TrackGap matches orders by ID so these
+          causes can be separated.</p>
+      </details>
+      <details>
+        <summary>Does TrackGap modify my Shopify theme?</summary>
+        <p>No. TrackGap uses official Shopify APIs and a Shopify web pixel
+          extension. There is no theme code for the merchant to install or
+          maintain.</p>
+      </details>
+      <details>
+        <summary>Can TrackGap recover missing GA4 conversions?</summary>
+        <p>Yes, when the visitor granted the required consent and a valid GA4
+          client identifier is available. TrackGap does not send conversions
+          when consent is declined or cannot be demonstrated.</p>
+      </details>
+      <details>
+        <summary>What customer data does TrackGap store?</summary>
+        <p>TrackGap does not request customer names, email addresses, postal
+          addresses, phone numbers, or payment details. It uses order IDs,
+          values, timestamps, traffic sources, and pseudonymous analytics
+          identifiers needed for reconciliation.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<div class="final">
+  <div class="wrap rev">
+    <h2>See your own numbers</h2>
+    <p>Install it, connect GA4, and you will know within a minute how many of
+      your orders are actually being tracked.</p>
+    <a class="btn primary" href="https://apps.shopify.com/trackgap">Install on Shopify</a>
+    <p class="cap" style="margin-top:18px">Free plan · No code · Read-only access</p>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div>© 2026 NullLogic s.r.o. · Slovakia</div>
+    <div>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:karol@nulllogic.eu">karol@nulllogic.eu</a>
+      <a href="https://nulllogic.eu">NullLogic</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // count-up v hero termináli
+  document.querySelectorAll("[data-count]").forEach(function(el){
+    var target = +el.dataset.count;
+    if (reduced) { el.textContent = target; return; }
+    var t0 = null, dur = 1100;
+    function step(ts){
+      if (!t0) t0 = ts;
+      var p = Math.min((ts - t0) / dur, 1);
+      el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(step);
+    }
+    setTimeout(function(){ requestAnimationFrame(step); }, 250);
+    // poistka: throttlovany rAF (tab v pozadi) nesmie nechat nuly
+    setTimeout(function(){ el.textContent = target; }, 2600);
+  });
+
+  // reveal-on-scroll
+  if (!("IntersectionObserver" in window) || reduced) {
+    document.querySelectorAll(".rev").forEach(function(el){ el.classList.add("in"); });
+    return;
+  }
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+    });
+  }, { threshold: .12 });
+  document.querySelectorAll(".rev").forEach(function(el){ io.observe(el); });
+})();
+</script>
+
+<!-- prevzate z /v2: consent lista — analytics_storage sa zapne az po suhlase -->
+<div class="consent" id="analytics-consent" role="dialog" aria-label="Analytics cookies" aria-live="polite">
+  <p>We use Google Analytics to understand how this page is used. Analytics
+    storage stays off unless you accept. See our <a href="/privacy">privacy policy</a>.</p>
+  <div class="consent-actions">
+    <button type="button" data-consent="denied">Decline</button>
+    <button class="accept" type="button" data-consent="granted">Accept analytics</button>
+  </div>
+</div>
+<script>
+(function(){
+  var consentKey = "trackgap_analytics_consent";
+  var saved = null;
+  try { saved = localStorage.getItem(consentKey); } catch (e) {}
+  if (saved === "granted") gtag("consent","update",{analytics_storage:"granted"});
+  else if (!saved) document.getElementById("analytics-consent").classList.add("show");
+  document.querySelectorAll("[data-consent]").forEach(function(button){
+    button.addEventListener("click", function(){
+      var value = button.dataset.consent;
+      try { localStorage.setItem(consentKey, value); } catch (e) {}
+      gtag("consent","update",{analytics_storage:value});
+      document.getElementById("analytics-consent").classList.remove("show");
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

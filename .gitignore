@@ -1,0 +1,19 @@
+# dependencies / build output
+node_modules/
+dist/
+.shopify/
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+*.key
+
+# runtime data
+data/
+*.db
+*.db-*
+*.sqlite
+*.log

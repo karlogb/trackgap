@@ -1,0 +1,38 @@
+# TrackGap web pixel extension.
+#
+# Bezi na storefronte aj v checkoute, v izolovanom sandboxe. Merchant ho
+# needituje ani neinstaluje — Shopify ho aktivuje pri instalacii appky.
+#
+# Ucel: precitat GA4 client_id z _ga cookie a reklamne click ID z URL, aby sa
+# doplnena konverzia priradila k spravnej navsteve. Bez toho by skoncila ako
+# direct/none, co je horsie nez ked chyba.
+
+api_version = "2026-07"
+
+[[extensions]]
+name = "TrackGap identity"
+handle = "trackgap-pixel"
+uid = "3ceeeb9e-2022-385d-7fd3-7195781d6742b521a901"
+type = "web_pixel_extension"
+runtime_context = "strict"
+
+[extensions.customer_privacy]
+# Bez suhlasu pixel nebezi — Shopify to vynucuje cez Customer Privacy API.
+# Preto v UI hlasime "nedalo sa doplnit: zakaznik odmietol suhlas".
+analytics = true
+marketing = true
+preferences = false
+sale_of_data = "enabled"
+
+[extensions.settings]
+type = "object"
+
+  [extensions.settings.fields.endpoint]
+  name = "Endpoint"
+  description = "Where the pixel reports identity"
+  type = "single_line_text_field"
+
+  [extensions.settings.fields.measurementId]
+  name = "GA4 Measurement ID"
+  description = "Used to read the GA4 session cookie"
+  type = "single_line_text_field"
