@@ -17,3 +17,4 @@ data/
 *.db-*
 *.sqlite
 *.log
+__pycache__/
